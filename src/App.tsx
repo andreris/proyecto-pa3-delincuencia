@@ -1,0 +1,93 @@
+import React, { useState } from 'react';
+import { AuthProvider } from './context/AuthContext';
+import { IncidentProvider } from './context/IncidentContext';
+import { Navbar } from './components/Navigation/Navbar';
+import { LandingPage } from './components/Landing/LandingPage';
+import { MapView } from './components/Dashboard/MapView';
+import { PreventiveRoutesView } from './components/Routes/PreventiveRoutesView';
+import { TrustedContactsView } from './components/SOS/TrustedContactsView';
+import { ModerationPanel } from './components/Moderation/ModerationPanel';
+import { ProfileView } from './components/Profile/ProfileView';
+import { ReportIncidentModal } from './components/Report/ReportIncidentModal';
+import { SosModal } from './components/SOS/SosModal';
+import { AuthModal } from './components/Auth/AuthModal';
+
+type AppTab = 'landing' | 'map' | 'routes' | 'sos' | 'moderation' | 'profile';
+
+function MainApp() {
+  const [currentTab, setCurrentTab] = useState<AppTab>('map');
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isSosModalOpen, setIsSosModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
+
+  const handleOpenRegister = () => {
+    setAuthModalMode('register');
+    setIsAuthModalOpen(true);
+  };
+
+  return (
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#F8FAFC] text-[#0F172A]">
+      {/* Top Navbar */}
+      <Navbar
+        currentTab={currentTab}
+        setCurrentTab={setCurrentTab}
+        onOpenReportModal={() => setIsReportModalOpen(true)}
+        onOpenSosModal={() => setIsSosModalOpen(true)}
+      />
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        {currentTab === 'landing' && (
+          <LandingPage
+            onGoToMap={() => setCurrentTab('map')}
+            onOpenRegister={handleOpenRegister}
+            onGoToRoutes={() => setCurrentTab('routes')}
+            onGoToSos={() => setCurrentTab('sos')}
+          />
+        )}
+
+        {currentTab === 'map' && (
+          <MapView
+            onOpenReportModal={() => setIsReportModalOpen(true)}
+          />
+        )}
+
+        {currentTab === 'routes' && <PreventiveRoutesView />}
+
+        {currentTab === 'sos' && <TrustedContactsView />}
+
+        {currentTab === 'moderation' && <ModerationPanel />}
+
+        {currentTab === 'profile' && <ProfileView />}
+      </main>
+
+      {/* Global Modals */}
+      <ReportIncidentModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+      />
+
+      <SosModal
+        isOpen={isSosModalOpen}
+        onClose={() => setIsSosModalOpen(false)}
+      />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        initialMode={authModalMode}
+      />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <IncidentProvider>
+        <MainApp />
+      </IncidentProvider>
+    </AuthProvider>
+  );
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Vigila.pe",
+  "description": "Plataforma comunitaria de geoseguridad para ciudadanos, conductores y comerciantes del Perú con mapa interactivo de incidentes, rutas preventivas y red SOS.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
