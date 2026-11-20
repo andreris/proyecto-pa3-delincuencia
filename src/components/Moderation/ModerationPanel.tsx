@@ -3,6 +3,7 @@ import { useIncidents } from '../../context/IncidentContext';
 import { useAuth } from '../../context/AuthContext';
 import { IncidentReport } from '../../types';
 import { SocialSourcesTab } from './SocialSourcesTab';
+import { WebSourcesTab } from './WebSourcesTab';
 import { fetchBackendIncidents, reviewBackendIncident } from '../../services/apiClient';
 import { getSafeExternalUrl, sanitizeExternalText } from '../../utils/sanitize';
 import {
@@ -16,6 +17,7 @@ import {
   Lock,
   FileCheck,
   Radio,
+  Globe,
   ExternalLink
 } from 'lucide-react';
 
@@ -37,7 +39,7 @@ export const ModerationPanel: React.FC = () => {
     openModeratorModal
   } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'stats' | 'logs'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'web' | 'stats' | 'logs'>('pending');
   const [filterDistrict, setFilterDistrict] = useState<string>('all');
   const [reasonInput, setReasonInput] = useState<{ [id: string]: string }>({});
 
@@ -200,6 +202,18 @@ export const ModerationPanel: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('web')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'web'
+                ? 'bg-[#0B1F3A] text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            Fuentes web
+          </button>
+
+          <button
             onClick={() => setActiveTab('stats')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
               activeTab === 'stats'
@@ -249,6 +263,11 @@ export const ModerationPanel: React.FC = () => {
                       {report.source === 'x' && (
                         <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-900 text-white">
                           Fuente externa: X (no visible hasta verificar)
+                        </span>
+                      )}
+                      {report.source === 'rpp' && (
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-900 text-white">
+                          Fuente externa: RPP Noticias (no visible hasta verificar)
                         </span>
                       )}
                       <span className="text-[10px] font-semibold text-slate-500">
@@ -316,6 +335,9 @@ export const ModerationPanel: React.FC = () => {
 
         {/* TAB 2: SOCIAL SOURCES (X API v2) */}
         {activeTab === 'social' && <SocialSourcesTab />}
+
+        {/* TAB 3: WEB SOURCES (RPP Noticias RSS) */}
+        {activeTab === 'web' && <WebSourcesTab />}
 
         {/* TAB 2: STATISTICS */}
         {activeTab === 'stats' && (

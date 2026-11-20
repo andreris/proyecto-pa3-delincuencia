@@ -9,16 +9,20 @@ import { DatabaseAdapter } from './db/types.js';
 import { issueSessionToken } from './middleware/auth.js';
 import { createIncidentRouter } from './routes/incidentRoutes.js';
 import { createSocialRouter } from './routes/socialRoutes.js';
+import { createWebRouter } from './routes/webRoutes.js';
 import { XService } from './services/xService.js';
+import { WebService } from './services/webService.js';
 
 export interface AppDependencies {
   db: DatabaseAdapter;
   xService?: XService;
+  webService?: WebService;
 }
 
-export function createApp({ db, xService }: AppDependencies) {
+export function createApp({ db, xService, webService }: AppDependencies) {
   const app = express();
   const resolvedXService = xService || new XService();
+  const resolvedWebService = webService || new WebService();
 
   app.set('trust proxy', 1);
 
@@ -110,6 +114,7 @@ export function createApp({ db, xService }: AppDependencies) {
 
   app.use('/api/incidents', createIncidentRouter(db));
   app.use('/api/social', createSocialRouter(db, resolvedXService));
+  app.use('/api/web', createWebRouter(db, resolvedWebService));
 
   // Ensure unknown /api routes return JSON 404 instead of SPA fallback
   app.use('/api', (_req, res) => {

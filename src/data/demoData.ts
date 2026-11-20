@@ -4,7 +4,8 @@ import {
   LocationReferenceKey,
   PreventiveRoute,
   SocialPost,
-  TrustedContact
+  TrustedContact,
+  WebNewsItem
 } from '../types';
 
 export const DEMO_INCIDENTS: IncidentReport[] = [
@@ -761,3 +762,111 @@ export const DEMO_SOCIAL_POSTS: SocialPost[] = [
     isDemo: true
   }
 ];
+
+export const DEMO_WEB_NEWS: WebNewsItem[] = [
+  {
+    id: 'WEB-DEMO-01',
+    source: 'rpp',
+    sourceName: 'RPP Noticias',
+    externalId: 'https://rpp.pe/lima/policiales/asalto-farmacia-los-olivos-demo-01',
+    title: 'Delincuentes armados asaltan farmacia en la Av. Carlos Izaguirre, Los Olivos',
+    excerpt:
+      '[Datos de demostración RSS] Dos sujetos ingresaron a un local cercano al óvalo Izaguirre en Los Olivos, Lima. Personal de Serenazgo y PNP iniciaron el plan cerco en la zona.',
+    publishedAt: '2026-11-19T14:40:00Z',
+    originalUrl: 'https://rpp.pe/lima/policiales/asalto-farmacia-los-olivos-demo-01',
+    importedAt: '2026-11-19T14:50:00Z',
+    status: 'Pendiente de validación',
+    state: 'pending_validation',
+    suggestedCategory: 'asalto',
+    suggestedRiskLevel: 'alto',
+    district: 'Los Olivos',
+    detectedDistrict: 'Los Olivos',
+    latitude: -11.9914,
+    longitude: -77.0712,
+    locationLabel: 'Av. Carlos Izaguirre, Los Olivos, Lima',
+    locationConfidence: 'high',
+    locationStatus: 'exact_candidate',
+    locationSource: 'text_geocoded',
+    isLimaValidated: true,
+    isDemo: true
+  },
+  {
+    id: 'WEB-DEMO-02',
+    source: 'rpp',
+    sourceName: 'RPP Noticias',
+    externalId: 'https://rpp.pe/lima/seguridad/extorsion-comerciantes-sjl-demo-02',
+    title: 'Comerciantes denuncian cobro de cupos en zona comercial de San Juan de Lurigancho',
+    excerpt:
+      '[Datos de demostración RSS] Propietarios de bodegas en San Juan de Lurigancho, Lima reportaron amenazas extorsivas y solicitaron mayor patrullaje policial preventivo.',
+    publishedAt: '2026-11-18T17:15:00Z',
+    originalUrl: 'https://rpp.pe/lima/seguridad/extorsion-comerciantes-sjl-demo-02',
+    importedAt: '2026-11-18T17:25:00Z',
+    status: 'Pendiente de validación',
+    state: 'pending_validation',
+    suggestedCategory: 'extorsion',
+    suggestedRiskLevel: 'alto',
+    district: 'San Juan de Lurigancho',
+    detectedDistrict: 'San Juan de Lurigancho',
+    latitude: null,
+    longitude: null,
+    locationLabel: 'Área general de San Juan de Lurigancho, Lima Metropolitana',
+    locationConfidence: 'low',
+    locationStatus: 'district_only',
+    locationSource: 'district_centroid',
+    isLimaValidated: true,
+    isDemo: true
+  },
+  {
+    id: 'WEB-DEMO-03',
+    source: 'rpp',
+    sourceName: 'RPP Noticias',
+    externalId: 'https://rpp.pe/lima/policiales/operativo-robos-lima-metropolitana-demo-03',
+    title: 'Policía despliega operativo preventivo contra robo de celulares en Lima Metropolitana',
+    excerpt:
+      '[Datos de demostración RSS] Agentes policiales realizan controles preventivos en distintos puntos de Lima Metropolitana sin precisar una calle o distrito único.',
+    publishedAt: '2026-11-17T10:30:00Z',
+    originalUrl: 'https://rpp.pe/lima/policiales/operativo-robos-lima-metropolitana-demo-03',
+    importedAt: '2026-11-17T10:35:00Z',
+    status: 'Pendiente de validación',
+    state: 'pending_validation',
+    suggestedCategory: 'hurto_menor',
+    suggestedRiskLevel: 'medio',
+    detectedDistrict: 'Sin distrito',
+    latitude: null,
+    longitude: null,
+    locationLabel: 'Lima Metropolitana (sin distrito o calle específica en extracto)',
+    locationConfidence: 'low',
+    locationStatus: 'unknown',
+    locationSource: 'none',
+    isLimaValidated: true,
+    isDemo: true
+  },
+  {
+    id: 'WEB-DEMO-04',
+    source: 'rpp',
+    sourceName: 'RPP Noticias',
+    externalId: 'https://rpp.pe/peru/callao/robo-vehiculo-bellavista-demo-04',
+    title: 'Reportan robo vehicular en inmediaciones de Bellavista, Callao',
+    excerpt:
+      '[Datos de demostración RSS] Hecho registrado en la Provincia Constitucional del Callao, fuera de la lista permitida de Lima Metropolitana.',
+    publishedAt: '2026-11-16T08:15:00Z',
+    originalUrl: 'https://rpp.pe/peru/callao/robo-vehiculo-bellavista-demo-04',
+    importedAt: '2026-11-16T08:20:00Z',
+    status: 'Descartado',
+    state: 'discarded',
+    suggestedCategory: 'robo',
+    suggestedRiskLevel: 'medio',
+    detectedDistrict: 'Sin distrito',
+    latitude: null,
+    longitude: null,
+    locationConfidence: 'low',
+    locationStatus: 'unknown',
+    locationSource: 'none',
+    isLimaValidated: false,
+    moderatorName: 'Filtro automático Lima Metropolitana (RSS)',
+    reviewReason: 'Ubicación fuera de Lima Metropolitana: Callao y sus distritos están excluidos de esta fuente.',
+    reviewedAt: '2026-11-16T08:20:00Z',
+    isDemo: true
+  }
+];
+

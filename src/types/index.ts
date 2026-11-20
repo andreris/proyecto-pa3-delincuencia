@@ -47,7 +47,7 @@ export interface IncidentReport {
   falseReportFlags: number;
   helpfulCount: number;
   reportedByRole: 'Peatón' | 'Conductor' | 'Comerciante' | 'Ciudadano';
-  source?: 'citizen' | 'x';
+  source?: 'citizen' | 'x' | 'rpp';
   sourceUrl?: string;
   locationStatus?: LocationStatus;
   locationConfidence?: LocationConfidence;
@@ -100,16 +100,61 @@ export interface SocialSourceAudit {
     | 'social_post_linked'
     | 'social_post_discarded'
     | 'social_query_updated'
+    | 'web_sync'
+    | 'web_news_approved'
+    | 'web_news_saved'
+    | 'web_news_linked'
+    | 'web_news_discarded'
+    | 'web_filters_updated'
     | 'incident_verified'
     | 'incident_discarded'
     | 'retention_cleanup';
   actorId: string;
   actorName: string;
   actorRole: string;
-  targetType: 'social_post' | 'incident' | 'social_config' | 'system';
+  targetType:
+    | 'social_post'
+    | 'incident'
+    | 'social_config'
+    | 'web_news'
+    | 'web_config'
+    | 'system';
   targetId?: string;
   details: string;
   createdAt: string;
+}
+
+export interface WebNewsItem {
+  id: string;
+  source: 'rpp';
+  sourceName: 'RPP Noticias';
+  externalId: string;
+  title: string;
+  excerpt: string;
+  publishedAt: string;
+  originalUrl: string;
+  imageUrl?: string;
+  importedAt: string;
+  status: SocialPostStatus;
+  state?: 'pending_validation' | 'verified' | 'discarded';
+  suggestedCategory: IncidentCategory;
+  suggestedRiskLevel: RiskLevel;
+  district?: string;
+  detectedDistrict?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationLabel?: string;
+  locationConfidence?: LocationConfidence;
+  locationStatus?: LocationStatus;
+  locationSource?: LocationSource;
+  isLimaValidated?: boolean;
+  confirmedLocationDescription?: string;
+  moderatorId?: string;
+  moderatorName?: string;
+  reviewReason?: string;
+  reviewedAt?: string;
+  linkedIncidentId?: string;
+  isDemo?: boolean;
 }
 
 export type IncidentFilterKey =

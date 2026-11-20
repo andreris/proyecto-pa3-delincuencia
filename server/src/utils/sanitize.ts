@@ -1150,3 +1150,374 @@ export const DISTRICT_APPROX_CENTERS: Record<string, { lat: number; lng: number 
   'Puente Piedra': { lat: -11.8665, lng: -77.0768 },
   Carabayllo: { lat: -11.8832, lng: -77.0315 }
 };
+
+/**
+ * Normalizes a web article URL into a canonical HTTPS URL for deduplication and safe linking.
+ * Strips UTM/tracking parameters, hashes, and trailing slashes on non-root paths.
+ */
+export function canonicalizeWebUrl(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '';
+    }
+    parsed.protocol = 'https:';
+    parsed.hash = '';
+
+    const trackingParams = [
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_term',
+      'utm_content',
+      'fbclid',
+      'gclid',
+      'ref',
+      'source'
+    ];
+    for (const param of trackingParams) {
+      parsed.searchParams.delete(param);
+    }
+
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Validates and normalizes an optional RSS image URL (HTTPS only).
+ */
+export function sanitizeOptionalImageUrl(rawUrl?: string): string | undefined {
+  if (!rawUrl || typeof rawUrl !== 'string') return undefined;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+    }
+    if (parsed.protocol !== 'https:') {
+      return undefined;
+    }
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+const NON_LIMA_PERU_REGIONS: Array<{ label: string; regex: RegExp }> = [
+  { label: 'Arequipa', regex: /\barequipa\b/ },
+  { label: 'Trujillo / La Libertad', regex: /\b(trujillo|la libertad|chepen|pacasmayo|viru)\b/ },
+  { label: 'Cusco', regex: /\b(cusco|cuzco|quillabamba|urubamba)\b/ },
+  { label: 'Piura', regex: /\b(piura|sullana|talara|paita|sechura)\b/ },
+  { label: 'Chiclayo / Lambayeque', regex: /\b(chiclayo|lambayeque|ferrenafe)\b/ },
+  { label: 'Iquitos / Loreto', regex: /\b(iquitos|loreto|yurimaguas)\b/ },
+  { label: 'Huancayo / Junín', regex: /\b(huancayo|junin|tarma|satipo|chanchamayo|la oroya)\b/ },
+  { label: 'Tacna', regex: /\btacna\b/ },
+  { label: 'Puno / Juliaca', regex: /\b(puno|juliaca)\b/ },
+  { label: 'Ica / Chincha / Pisco', regex: /\b(chincha|pisco|nazca|ica)\b/ },
+  { label: 'Áncash / Chimbote / Huaraz', regex: /\b(chimbote|nuevo chimbote|huaraz|ancash|casma)\b/ },
+  { label: 'Cajamarca', regex: /\b(cajamarca|jaen)\b/ },
+  { label: 'Ayacucho', regex: /\bayacucho\b/ },
+  { label: 'Huánuco / Tingo María', regex: /\b(huanuco|tingo maria)\b/ },
+  { label: 'Ucayali / Pucallpa', regex: /\b(pucallpa|ucayali)\b/ },
+  { label: 'Tarapoto / San Martín', regex: /\b(tarapoto|moyobamba|san martin(?!\s+de\s+porres))\b/ },
+  { label: 'Tumbes', regex: /\btumbes\b/ },
+  { label: 'Moquegua / Ilo', regex: /\b(moquegua|ilo)\b/ },
+  { label: 'Madre de Dios / Puerto Maldonado', regex: /\b(madre de dios|puerto maldonado)\b/ },
+  { label: 'Amazonas / Chachapoyas', regex: /\b(chachapoyas|bagua|amazonas)\b/ },
+  { label: 'Pasco / Huancavelica / Apurímac', regex: /\b(cerro de pasco|pasco|huancavelica|abancay|andahuaylas|apurimac)\b/ }
+];
+
+export function detectNonLimaPeruRegion(text: string): string | undefined {
+  const normalized = normalizeForMatching(text);
+  if (!normalized) return undefined;
+
+  for (const entry of NON_LIMA_PERU_REGIONS) {
+    if (entry.regex.test(normalized)) {
+      return entry.label;
+    }
+  }
+  return undefined;
+}
+
+export function matchesAdditionalKeywords(text: string, additionalKeywords?: string): boolean {
+  const clean = sanitizeAdditionalKeywords(additionalKeywords);
+  if (!clean) return true;
+  const normalizedText = normalizeForMatching(text);
+  const tokens = normalizeForMatching(clean)
+    .split(' ')
+    .filter(t => t.length >= 2);
+  if (tokens.length === 0) return true;
+  return tokens.every(token => normalizedText.includes(token));
+}
+
+export interface WebNewsGeolocationOutcome {
+  accepted: boolean;
+  detectedDistrict: string;
+  latitude: number | null;
+  longitude: number | null;
+  locationLabel: string | null;
+  locationConfidence: LocationConfidence;
+  locationStatus: LocationStatus;
+  locationSource: LocationSource;
+  isLimaValidated: boolean;
+  suggestedCategory: IncidentCategory;
+  suggestedRiskLevel: RiskLevel;
+  discardReason?: string;
+}
+
+/**
+ * Mandatory server-side validation and safe geolocation pipeline for RPP RSS web news:
+ * - Analyzes ONLY title + brief RSS excerpt (never scrapes/stores full articles).
+ * - Rejects banking/administrative false positives, foreign locations, Callao, and other Peruvian cities.
+ * - Accepts only news with Lima Metropolitana, Perú evidence.
+ * - Matches active visual filters (incident types, location references, districts, additional keywords, date range).
+ * - Never invents coordinates when only district or general Lima Metropolitana is mentioned.
+ */
+export async function validateAndGeolocateWebNews(options: {
+  title: string;
+  excerpt: string;
+  publishedAt?: string;
+  selectedDistricts?: string[];
+  selectedIncidentTypes?: IncidentFilterKey[];
+  selectedLocationRefs?: LocationReferenceKey[];
+  additionalKeywords?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  geocoder?: GeocoderService;
+}): Promise<WebNewsGeolocationOutcome> {
+  const safeTitle = sanitizeExternalText(options.title, 220);
+  const safeExcerpt = sanitizeExternalText(options.excerpt, 360);
+  const combinedText = `${safeTitle}. ${safeExcerpt}`.trim();
+  const normalizedText = normalizeForMatching(combinedText);
+  const meta = suggestMetadataFromText(combinedText);
+
+  const rejectUnknown = (
+    reason: string,
+    districtHint = 'Sin distrito'
+  ): WebNewsGeolocationOutcome => ({
+    accepted: false,
+    detectedDistrict: districtHint,
+    latitude: null,
+    longitude: null,
+    locationLabel: null,
+    locationConfidence: 'low',
+    locationStatus: 'unknown',
+    locationSource: 'none',
+    isLimaValidated: false,
+    suggestedCategory: meta.suggestedCategory,
+    suggestedRiskLevel: meta.suggestedRiskLevel,
+    discardReason: reason
+  });
+
+  // 1. Date range check
+  if (options.publishedAt && (options.dateFrom || options.dateTo)) {
+    const publishedMs = new Date(options.publishedAt).getTime();
+    if (Number.isFinite(publishedMs)) {
+      if (options.dateFrom) {
+        const fromMs = new Date(`${options.dateFrom}T00:00:00.000Z`).getTime();
+        if (publishedMs < fromMs) {
+          return rejectUnknown(
+            `Noticia anterior a la fecha mínima (${options.dateFrom}).`,
+            meta.suggestedDistrict || 'Sin distrito'
+          );
+        }
+      }
+      if (options.dateTo) {
+        const toMs = new Date(`${options.dateTo}T23:59:59.999Z`).getTime();
+        if (publishedMs > toMs) {
+          return rejectUnknown(
+            `Noticia posterior a la fecha máxima (${options.dateTo}).`,
+            meta.suggestedDistrict || 'Sin distrito'
+          );
+        }
+      }
+    }
+  }
+
+  // 2. Administrative / banking false-positive exclusion check
+  if (isAdministrativeOrBankingPost(combinedText)) {
+    return rejectUnknown(
+      'Falso positivo administrativo o bancario descartado automáticamente (banco, trámite, documentos, licencia o municipalidad).',
+      meta.suggestedDistrict || 'Sin distrito'
+    );
+  }
+
+  // 3. Foreign country/city exclusion
+  const foreignLabel = detectForeignLocation(combinedText);
+  if (foreignLabel) {
+    return rejectUnknown(
+      `Noticia fuera de Lima Metropolitana: ubicación extranjera detectada (${foreignLabel}).`
+    );
+  }
+
+  // 4. Callao exclusion (strictly Lima Metropolitana only)
+  const callaoMatch = detectCallaoLocation(combinedText);
+  if (callaoMatch) {
+    return rejectUnknown(
+      'Ubicación fuera de Lima Metropolitana: Callao y sus distritos están excluidos de esta fuente.'
+    );
+  }
+
+  // 5. Other Peruvian cities / regions exclusion
+  const nonLimaRegion = detectNonLimaPeruRegion(combinedText);
+  const explicitLimaMetro = /\blima metropolitana\b/.test(normalizedText);
+  if (nonLimaRegion && !explicitLimaMetro) {
+    return rejectUnknown(
+      `Noticia regional fuera de Lima Metropolitana: referencia detectada a ${nonLimaRegion}.`
+    );
+  }
+
+  // 6. Visual filters check (incident types, location references, additional keywords)
+  const selectedIncidentTypes = sanitizeIncidentFilterKeys(options.selectedIncidentTypes);
+  if (
+    selectedIncidentTypes.length > 0 &&
+    !matchesIncidentFilterKeys(combinedText, selectedIncidentTypes, meta.suggestedCategory)
+  ) {
+    return rejectUnknown(
+      'No coincide con el filtro de tipo de incidente seleccionado.',
+      meta.suggestedDistrict || 'Sin distrito'
+    );
+  }
+
+  const selectedLocationRefs = sanitizeLocationRefKeys(options.selectedLocationRefs);
+  if (selectedLocationRefs.length > 0 && !matchesLocationReferences(combinedText, selectedLocationRefs)) {
+    return rejectUnknown(
+      'Sin referencia de ubicación solicitada (avenida, calle, jirón, cuadra, cruce, esquina, paradero, mercado, parque o estación).',
+      meta.suggestedDistrict || 'Sin distrito'
+    );
+  }
+
+  if (
+    options.additionalKeywords &&
+    !matchesAdditionalKeywords(combinedText, options.additionalKeywords)
+  ) {
+    return rejectUnknown(
+      'No contiene las palabras adicionales solicitadas en el filtro.',
+      meta.suggestedDistrict || 'Sin distrito'
+    );
+  }
+
+  // 7. District & Lima Metropolitana evidence evaluation
+  // Distinguish specific "Cercado de Lima / Centro de Lima" from generic "Lima / Lima Metropolitana"
+  const rawDetected = meta.suggestedDistrict;
+  const hasSpecificCercadoLima =
+    /\b(cercado de lima|lima cercado|centro de lima|lima centro|distrito de lima)\b/.test(
+      normalizedText
+    );
+  const candidate = extractLocationCandidate(combinedText);
+
+  let detectedDistrict: string | undefined = rawDetected;
+  if (rawDetected === 'Lima' && !hasSpecificCercadoLima && !candidate) {
+    // General Lima Metropolitana mention without specific district or street -> keep for review as 'unknown'
+    detectedDistrict = undefined;
+  }
+
+  const mentionsLimaOrPeru = /\b(lima metropolitana|lima|peru)\b/.test(normalizedText);
+
+  let geocodeResult: GeocodeResult | null = null;
+  if (candidate && options.geocoder) {
+    geocodeResult = await options.geocoder.geocodeCandidate(
+      candidate,
+      detectedDistrict || 'Lima'
+    );
+    if (geocodeResult && !geocodeResult.accepted) {
+      return rejectUnknown(
+        geocodeResult.reason ||
+          (geocodeResult.isForeign
+            ? 'País no confirmado según geocodificador.'
+            : 'Ubicación fuera de Lima Metropolitana según geocodificador.'),
+        detectedDistrict || 'Sin distrito'
+      );
+    }
+  }
+
+  const geocoderConfirmedLima = Boolean(geocodeResult?.accepted);
+  const hasLimaMetroEvidence =
+    mentionsLimaOrPeru ||
+    Boolean(detectedDistrict && ALLOWED_SOCIAL_DISTRICT_SET.has(detectedDistrict) && candidate) ||
+    Boolean(detectedDistrict && ALLOWED_SOCIAL_DISTRICT_SET.has(detectedDistrict) && mentionsLimaOrPeru) ||
+    Boolean(detectedDistrict && ALLOWED_SOCIAL_DISTRICT_SET.has(detectedDistrict)) ||
+    geocoderConfirmedLima;
+
+  if (!hasLimaMetroEvidence) {
+    return rejectUnknown(
+      'Sin evidencia de Lima Metropolitana, Perú en el titular o extracto RSS.'
+    );
+  }
+
+  // 8. Selected district filter check
+  const allowedFilter = sanitizeAllowedDistricts(options.selectedDistricts);
+  if (allowedFilter.length > 0) {
+    if (!detectedDistrict || !allowedFilter.includes(detectedDistrict)) {
+      return rejectUnknown(
+        `La noticia (${detectedDistrict || 'Sin distrito específico'}) no coincide con los distritos filtrados.`,
+        detectedDistrict || 'Sin distrito'
+      );
+    }
+  }
+
+  // 9. Exact candidate via geocoder
+  if (
+    geocodeResult?.accepted &&
+    geocodeResult.latitude !== undefined &&
+    geocodeResult.longitude !== undefined
+  ) {
+    const finalDistrict = detectedDistrict || 'Lima';
+    return {
+      accepted: true,
+      detectedDistrict: finalDistrict,
+      latitude: geocodeResult.latitude,
+      longitude: geocodeResult.longitude,
+      locationLabel: geocodeResult.locationLabel || candidate || `${finalDistrict}, Lima`,
+      locationConfidence: geocodeResult.confidence || 'high',
+      locationStatus: 'exact_candidate',
+      locationSource: 'text_geocoded',
+      isLimaValidated: true,
+      suggestedCategory: meta.suggestedCategory,
+      suggestedRiskLevel: meta.suggestedRiskLevel
+    };
+  }
+
+  // 10. Specific allowed district without geocoded street -> district_only (cannot publish directly without pin)
+  if (detectedDistrict && ALLOWED_SOCIAL_DISTRICT_SET.has(detectedDistrict)) {
+    return {
+      accepted: true,
+      detectedDistrict,
+      latitude: null,
+      longitude: null,
+      locationLabel: candidate
+        ? `${candidate} (${detectedDistrict}, Lima Metropolitana)`
+        : `Área general de ${detectedDistrict}, Lima Metropolitana`,
+      locationConfidence: candidate ? 'medium' : 'low',
+      locationStatus: 'district_only',
+      locationSource: 'district_centroid',
+      isLimaValidated: true,
+      suggestedCategory: meta.suggestedCategory,
+      suggestedRiskLevel: meta.suggestedRiskLevel
+    };
+  }
+
+  // 11. General Lima Metropolitana evidence without specific district or street -> unknown (review/reference only, NEVER publish directly to map)
+  return {
+    accepted: true,
+    detectedDistrict: 'Sin distrito',
+    latitude: null,
+    longitude: null,
+    locationLabel: candidate
+      ? `${candidate} (Lima Metropolitana)`
+      : 'Lima Metropolitana (sin distrito o calle específica en extracto)',
+    locationConfidence: 'low',
+    locationStatus: 'unknown',
+    locationSource: 'none',
+    isLimaValidated: true,
+    suggestedCategory: meta.suggestedCategory,
+    suggestedRiskLevel: meta.suggestedRiskLevel
+  };
+}
+

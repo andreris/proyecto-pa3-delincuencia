@@ -296,9 +296,11 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.removeItem('vigila_pe_mod_logs');
   };
 
-  // Publicly visible incidents (strictly excludes discarded items and unverified X-sourced reports)
+  // Publicly visible incidents (strictly excludes discarded items and unverified X/RPP-sourced reports)
   const publicIncidents = incidents.filter(
-    item => item.status !== 'Descartado' && (item.source !== 'x' || item.status === 'Verificado')
+    item =>
+      item.status !== 'Descartado' &&
+      ((item.source !== 'x' && item.source !== 'rpp') || item.status === 'Verificado')
   );
 
   // Filter computation (strictly excludes discarded items and unverified X-sourced reports from public map/feed)

@@ -15,19 +15,41 @@ export function sanitizeExternalText(input: string, maxLength = 320): string {
 }
 
 /**
- * Ensures external source URLs use HTTPS and valid domains (x.com / twitter.com).
+ * Ensures external source URLs use HTTPS and valid trusted domains (x.com / twitter.com / rpp.pe).
  */
 export function getSafeExternalUrl(url?: string): string | null {
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (
-      parsed.protocol === 'https:' &&
-      (parsed.hostname === 'x.com' ||
-        parsed.hostname === 'www.x.com' ||
-        parsed.hostname === 'twitter.com' ||
-        parsed.hostname === 'www.twitter.com')
-    ) {
+    const host = parsed.hostname.toLowerCase();
+    const isAllowed =
+      host === 'x.com' ||
+      host === 'www.x.com' ||
+      host === 'twitter.com' ||
+      host === 'www.twitter.com' ||
+      host === 'rpp.pe' ||
+      host.endsWith('.rpp.pe');
+
+    if (parsed.protocol === 'https:' && isAllowed) {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensures optional news thumbnail URLs use HTTPS (upgrading http to https safely).
+ */
+export function getSafeImageUrl(url?: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+    }
+    if (parsed.protocol === 'https:') {
       return parsed.toString();
     }
     return null;

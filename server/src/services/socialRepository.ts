@@ -54,7 +54,7 @@ interface IncidentRow {
   false_report_flags: number;
   helpful_count: number;
   reported_by_role: IncidentReportRecord['reportedByRole'];
-  source: 'citizen' | 'x';
+  source: 'citizen' | 'x' | 'rpp';
   source_url: string | null;
   location_status: LocationStatus | null;
   location_confidence: LocationConfidence | null;
@@ -727,7 +727,7 @@ export async function listIncidents(
     ? `SELECT * FROM incidents ORDER BY created_at DESC`
     : `SELECT * FROM incidents
        WHERE status != 'Descartado'
-         AND (source != 'x' OR status = 'Verificado')
+         AND (source NOT IN ('x', 'rpp') OR status = 'Verificado')
        ORDER BY created_at DESC`;
 
   const rows = await db.query<IncidentRow>(sql);
@@ -748,7 +748,7 @@ export async function createIncident(
     status?: ReportStatus;
     evidenceNote?: string;
     reportedByRole?: IncidentReportRecord['reportedByRole'];
-    source?: 'citizen' | 'x';
+    source?: 'citizen' | 'x' | 'rpp';
     sourceUrl?: string;
     locationStatus?: LocationStatus;
     locationConfidence?: LocationConfidence;
@@ -761,12 +761,12 @@ export async function createIncident(
   const initialStatus: ReportStatus = input.status || 'Pendiente de validación';
   const source = input.source || 'citizen';
 
-  // For X-sourced / moderator-confirmed reports, strictly obfuscate 200-500m and label "Ubicación aproximada"
+  // For X / RPP / moderator-confirmed reports, strictly obfuscate 200-500m and label "Ubicación aproximada"
   let lat: number;
   let lng: number;
   let address: string;
 
-  if (source === 'x' || input.locationStatus === 'moderator_confirmed') {
+  if (source === 'x' || source === 'rpp' || input.locationStatus === 'moderator_confirmed') {
     const obfuscated = obfuscateCoordinatesForPublicMap(
       input.approxLocation.lat,
       input.approxLocation.lng

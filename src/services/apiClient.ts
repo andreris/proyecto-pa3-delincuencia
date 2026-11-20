@@ -7,7 +7,8 @@ import {
   SocialPost,
   SocialPostStatus,
   SocialSourceAudit,
-  UserProfile
+  UserProfile,
+  WebNewsItem
 } from '../types';
 
 const metaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
@@ -553,6 +554,238 @@ export async function fetchSocialAuditLogs(user: UserProfile | null): Promise<So
   if (!res.ok) {
     throw new ApiClientError(
       data.error || 'No se pudo cargar la bitácora de auditoría.',
+      res.status
+    );
+  }
+  return data.logs || [];
+}
+
+export interface WebStatusResponse {
+  rppConfigured: boolean;
+  source: 'rpp';
+  sourceName: 'RPP Noticias';
+  rssUrl: string;
+  isSyncing: boolean;
+  filterDistricts?: string[];
+  filterIncidentTypes?: IncidentFilterKey[];
+  filterLocationRefs?: LocationReferenceKey[];
+  additionalKeywords?: string;
+  filterDateFrom?: string;
+  filterDateTo?: string;
+  allowedDistricts?: string[];
+  maxNewsPerSync?: number;
+  cooldownMinutes?: number;
+  canSyncNow?: boolean;
+  nextAllowedSyncAt?: string;
+  retryAfterSeconds?: number;
+  lastSyncAt?: string;
+  lastSyncStatus?: 'success' | 'error' | 'idle';
+  lastSyncMessage?: string;
+  lastImportedCount: number;
+  stats: {
+    total: number;
+    pending: number;
+    verified: number;
+    discarded: number;
+  };
+}
+
+export async function fetchWebStatus(user: UserProfile | null): Promise<WebStatusResponse> {
+  const res = await authorizedFetch('/api/web/status', user);
+  const data = (await res.json()) as WebStatusResponse & { error?: string };
+  if (!res.ok) {
+    throw new ApiClientError(
+      data.error || 'No se pudo obtener el estado de fuentes web.',
+      res.status
+    );
+  }
+  return data;
+}
+
+export async function updateWebConfig(
+  user: UserProfile | null,
+  payload: {
+    filterDistricts?: string[];
+    filterIncidentTypes?: IncidentFilterKey[];
+    filterLocationRefs?: LocationReferenceKey[];
+    additionalKeywords?: string | null;
+    filterDateFrom?: string | null;
+    filterDateTo?: string | null;
+  }
+): Promise<void> {
+  const res = await authorizedFetch('/api/web/config', user, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) {
+    throw new ApiClientError(
+      data.error || 'No se pudieron actualizar los filtros de fuentes web.',
+      res.status
+    );
+  }
+}
+
+export async function triggerRppSync(
+  user: UserProfile | null,
+  filters?: SocialFilterOptions
+): Promise<{
+  message: string;
+  result: {
+    sourceName: 'RPP Noticias';
+    rssUrl: string;
+    fetchedCount: number;
+    importedCount: number;
+    discardedCount: number;
+    duplicatesSkipped: number;
+    capSkippedCount?: number;
+    discardReasons: string[];
+    maxNewsLimit: number;
+    cooldownMinutes: number;
+    nextAllowedSyncAt: string;
+  };
+  stats: WebStatusResponse['stats'];
+}> {
+  const res = await authorizedFetch('/api/web/rpp/sync', user, {
+    method: 'POST',
+    body: filters ? JSON.stringify(filters) : undefined
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    message?: string;
+    code?: string;
+    nextAllowedSyncAt?: string;
+    retryAfterSeconds?: number;
+    result?: {
+      sourceName: 'RPP Noticias';
+      rssUrl: string;
+      fetchedCount: number;
+      importedCount: number;
+      discardedCount: number;
+      duplicatesSkipped: number;
+      capSkippedCount?: number;
+      discardReasons: string[];
+      maxNewsLimit: number;
+      cooldownMinutes: number;
+      nextAllowedSyncAt: string;
+    };
+    stats?: WebStatusResponse['stats'];
+    error?: string;
+  };
+  if (!res.ok || !data.result || !data.stats) {
+    throw new ApiClientError(
+      data.error || 'No se pudo sincronizar con RPP Noticias RSS.',
+      res.status,
+      {
+        code: data.code,
+        nextAllowedSyncAt: data.nextAllowedSyncAt,
+        retryAfterSeconds: data.retryAfterSeconds
+      }
+    );
+  }
+  return {
+    message: data.message || 'Sincronización RPP Noticias completada.',
+    result: data.result,
+    stats: data.stats
+  };
+}
+
+export async function fetchWebNews(
+  user: UserProfile | null,
+  filters: SocialFilterOptions & { status?: SocialPostStatus } = {}
+): Promise<{ news: WebNewsItem[]; stats: WebStatusResponse['stats'] }> {
+  const search = new URLSearchParams();
+  if (filters.status) search.set('status', filters.status);
+  if (filters.districts && filters.districts.length > 0) {
+    search.set('districts', filters.districts.join(','));
+  }
+  if (filters.incidentTypes && filters.incidentTypes.length > 0) {
+    search.set('incidentTypes', filters.incidentTypes.join(','));
+  }
+  if (filters.locationReferences && filters.locationReferences.length > 0) {
+    search.set('locationRefs', filters.locationReferences.join(','));
+  }
+  if (filters.additionalKeywords) {
+    search.set('additionalKeywords', filters.additionalKeywords);
+  }
+  if (filters.dateFrom) search.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) search.set('dateTo', filters.dateTo);
+
+  const qs = search.toString() ? `?${search.toString()}` : '';
+  const res = await authorizedFetch(`/api/web/news${qs}`, user);
+  const data = (await res.json()) as {
+    news?: WebNewsItem[];
+    stats?: WebStatusResponse['stats'];
+    error?: string;
+  };
+  if (!res.ok) {
+    throw new ApiClientError(
+      data.error || 'No se pudieron cargar las noticias web.',
+      res.status
+    );
+  }
+  return {
+    news: data.news || [],
+    stats: data.stats || { total: 0, pending: 0, verified: 0, discarded: 0 }
+  };
+}
+
+export async function reviewBackendWebNews(
+  user: UserProfile | null,
+  newsId: string,
+  payload: {
+    action:
+      | 'approve_and_publish'
+      | 'save_for_review'
+      | 'save_as_reference'
+      | 'link_incident'
+      | 'discard';
+    reviewReason?: string;
+    district?: string;
+    category?: IncidentCategory;
+    riskLevel?: RiskLevel;
+    title?: string;
+    description?: string;
+    latitude?: number;
+    longitude?: number;
+    locationLabel?: string;
+    confirmedLocationDescription?: string;
+    movedManually?: boolean;
+    linkedIncidentId?: string;
+  }
+): Promise<{
+  item: WebNewsItem;
+  createdIncident?: IncidentReport;
+  stats: WebStatusResponse['stats'];
+}> {
+  const res = await authorizedFetch(`/api/web/news/${encodeURIComponent(newsId)}/review`, user, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  });
+  const data = (await res.json()) as {
+    item?: WebNewsItem;
+    createdIncident?: IncidentReport;
+    stats?: WebStatusResponse['stats'];
+    error?: string;
+  };
+  if (!res.ok || !data.item) {
+    throw new ApiClientError(
+      data.error || 'No se pudo procesar la revisión de la noticia.',
+      res.status
+    );
+  }
+  return {
+    item: data.item,
+    createdIncident: data.createdIncident,
+    stats: data.stats || { total: 0, pending: 0, verified: 0, discarded: 0 }
+  };
+}
+
+export async function fetchWebAuditLogs(user: UserProfile | null): Promise<SocialSourceAudit[]> {
+  const res = await authorizedFetch('/api/web/audit', user);
+  const data = (await res.json()) as { logs?: SocialSourceAudit[]; error?: string };
+  if (!res.ok) {
+    throw new ApiClientError(
+      data.error || 'No se pudo cargar la bitácora de auditoría web.',
       res.status
     );
   }

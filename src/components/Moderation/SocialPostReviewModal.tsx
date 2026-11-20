@@ -14,6 +14,7 @@ import { geocodeCandidateAddress } from '../../services/apiClient';
 import { useAuth } from '../../context/AuthContext';
 import {
   CheckCircle2,
+  ExternalLink,
   MapPin,
   Move,
   Save,
@@ -21,11 +22,17 @@ import {
   ShieldAlert,
   XCircle
 } from 'lucide-react';
+import { getSafeExternalUrl } from '../../utils/sanitize';
 
 interface SocialPostReviewModalProps {
   post: SocialPost;
   backendAvailable: boolean;
   submitting: boolean;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  initialTitle?: string;
+  saveButtonLabel?: string;
+  allowSaveWithoutDistrict?: boolean;
   onClose: () => void;
   onApproveAndPublish: (payload: {
     district: string;
@@ -58,6 +65,11 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
   post,
   backendAvailable,
   submitting,
+  sourceTitle,
+  sourceUrl,
+  initialTitle,
+  saveButtonLabel = 'Guardar para revisión',
+  allowSaveWithoutDistrict = false,
   onClose,
   onApproveAndPublish,
   onSaveForReview,
@@ -85,7 +97,7 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
   const [category, setCategory] = useState<IncidentCategory>(post.suggestedCategory);
   const [riskLevel, setRiskLevel] = useState<RiskLevel>(post.suggestedRiskLevel);
   const [title, setTitle] = useState<string>(
-    `Alerta confirmada en ${initialDistrict || 'Lima Metropolitana'}`
+    initialTitle || `Alerta confirmada en ${initialDistrict || 'Lima Metropolitana'}`
   );
   const [description, setDescription] = useState<string>(sanitizeExternalText(post.text, 450));
 
@@ -330,7 +342,7 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
 
   const handleSaveDraft = async () => {
     setLocalError(null);
-    if (!district) {
+    if (!district && !allowSaveWithoutDistrict) {
       setLocalError('Selecciona un distrito permitido de Lima Metropolitana.');
       return;
     }
@@ -388,19 +400,37 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
 
         <form onSubmit={handleApproveSubmit} className="overflow-y-auto p-5 space-y-4 text-xs">
           {/* 1. Original sanitized text */}
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-bold text-slate-800">1. Texto original (sanitizado)</span>
-              {post.isLimaValidated && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-bold">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                  Ubicación validada: Lima Metropolitana, Perú
-                </span>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {post.isLimaValidated && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-bold">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    Ubicación validada: Lima Metropolitana, Perú
+                  </span>
+                )}
+                {getSafeExternalUrl(sourceUrl || post.postUrl) && (
+                  <a
+                    href={getSafeExternalUrl(sourceUrl || post.postUrl) || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-600 hover:underline"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Ver fuente original
+                  </a>
+                )}
+              </div>
             </div>
-            <p className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 leading-relaxed">
-              {sanitizeExternalText(post.text, 500)}
-            </p>
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 leading-relaxed space-y-1">
+              {sourceTitle && (
+                <p className="font-bold text-slate-900 text-xs">
+                  {sanitizeExternalText(sourceTitle, 220)}
+                </p>
+              )}
+              <p>{sanitizeExternalText(post.text, 500)}</p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
@@ -571,9 +601,13 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
                     <strong>Pin candidato:</strong> {pinCoords.lat.toFixed(5)},{' '}
                     {pinCoords.lng.toFixed(5)} (círculo azul = radio aproximado público)
                   </span>
+                ) : post.locationStatus === 'unknown' ? (
+                  <span className="text-amber-800 font-semibold">
+                    Sin ubicación específica: no se puede publicar directamente en el mapa. Usa “{saveButtonLabel}” o fija un pin manualmente dentro de Lima Metropolitana.
+                  </span>
                 ) : (
                   <span className="text-amber-800 font-semibold">
-                    Solo distrito detectado: mostrando área general en ámbar. Activa “Mover pin manualmente” para fijar ubicación aproximada.
+                    Solo distrito detectado: mostrando área general en ámbar. Activa “Mover pin manualmente” para fijar ubicación aproximada o usa “{saveButtonLabel}”.
                   </span>
                 )}
               </div>
@@ -611,11 +645,11 @@ export const SocialPostReviewModal: React.FC<SocialPostReviewModalProps> = ({
               <button
                 type="button"
                 onClick={handleSaveDraft}
-                disabled={submitting || !district}
+                disabled={submitting || (!district && !allowSaveWithoutDistrict)}
                 className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-800 border border-slate-300 font-bold inline-flex items-center gap-1.5"
               >
                 <Save className="w-4 h-4" />
-                Guardar para revisión
+                {saveButtonLabel}
               </button>
 
               <button
