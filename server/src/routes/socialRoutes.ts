@@ -259,7 +259,50 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   );
 
-  // Moderator-only: review a social post (create report, link to existing report, or discard)
+  // Moderator-only: geocode a candidate address within Lima Metropolitana, Perú
+  router.post(
+    '/geocode',
+    requireAuth,
+    requireModerator,
+    moderationLimiter,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const { query, district } = (req.body || {}) as {
+          query?: string;
+          district?: string;
+        };
+        if (!query || !query.trim() || query.trim().length < 3) {
+          res.status(400).json({
+            error: 'Ingresa una calle, avenida o lugar de al menos 3 caracteres para geocodificar.'
+          });
+          return;
+        }
+
+        const result = await xService.getGeocoder().geocodeCandidate(query.trim(), district?.trim());
+        if (!result) {
+          res.status(404).json({
+            error:
+              'No se encontraron coordenadas verificadas en Lima Metropolitana, Perú para esa referencia.'
+          });
+          return;
+        }
+        if (!result.accepted) {
+          res.status(400).json({
+            error: result.reason || 'Ubicación fuera de Lima Metropolitana, Perú.',
+            result
+          });
+          return;
+        }
+
+        res.json({ result });
+      } catch (err) {
+        console.error('[social/geocode] Error:', err);
+        res.status(500).json({ error: 'No se pudo consultar el geocodificador.' });
+      }
+    }
+  );
+
+  // Moderator-only: review a social post (approve_and_publish, save_for_review, create_report, link_incident, or discard)
   router.patch(
     '/posts/:id/review',
     requireAuth,
@@ -272,10 +315,17 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
 
         if (
           !body ||
-          !['create_report', 'link_incident', 'discard'].includes(body.action)
+          ![
+            'approve_and_publish',
+            'save_for_review',
+            'create_report',
+            'link_incident',
+            'discard'
+          ].includes(body.action)
         ) {
           res.status(400).json({
-            error: 'Acción inválida. Debe ser create_report, link_incident o discard.'
+            error:
+              'Acción inválida. Debe ser approve_and_publish, save_for_review, create_report, link_incident o discard.'
           });
           return;
         }

@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { DatabaseAdapter, SqlParam } from './types.js';
-import { CONFIG_COLUMN_MIGRATIONS, SCHEMA_STATEMENTS } from './schema.js';
+import {
+  CONFIG_COLUMN_MIGRATIONS,
+  INCIDENT_COLUMN_MIGRATIONS,
+  SCHEMA_STATEMENTS,
+  SOCIAL_POST_COLUMN_MIGRATIONS
+} from './schema.js';
 
 export class SqliteAdapter implements DatabaseAdapter {
   public readonly dialect = 'sqlite' as const;
@@ -24,7 +29,11 @@ export class SqliteAdapter implements DatabaseAdapter {
     for (const stmt of SCHEMA_STATEMENTS) {
       this.db.exec(stmt);
     }
-    for (const alterStmt of CONFIG_COLUMN_MIGRATIONS) {
+    for (const alterStmt of [
+      ...CONFIG_COLUMN_MIGRATIONS,
+      ...SOCIAL_POST_COLUMN_MIGRATIONS,
+      ...INCIDENT_COLUMN_MIGRATIONS
+    ]) {
       try {
         this.db.exec(alterStmt);
       } catch {

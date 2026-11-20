@@ -19,6 +19,9 @@ export const SCHEMA_STATEMENTS = [
     reported_by_role TEXT NOT NULL DEFAULT 'Ciudadano',
     source TEXT NOT NULL DEFAULT 'citizen',
     source_url TEXT,
+    location_status TEXT,
+    location_confidence TEXT,
+    location_source TEXT,
     created_at TEXT NOT NULL
   )`,
 
@@ -36,6 +39,14 @@ export const SCHEMA_STATEMENTS = [
     suggested_category TEXT NOT NULL,
     suggested_risk_level TEXT NOT NULL,
     suggested_district TEXT,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    location_label TEXT,
+    location_confidence TEXT NOT NULL DEFAULT 'low',
+    location_status TEXT NOT NULL DEFAULT 'unknown',
+    location_source TEXT NOT NULL DEFAULT 'none',
+    is_lima_validated INTEGER NOT NULL DEFAULT 0,
+    confirmed_location_description TEXT,
     moderator_id TEXT,
     moderator_name TEXT,
     review_reason TEXT,
@@ -80,4 +91,21 @@ export const CONFIG_COLUMN_MIGRATIONS = [
   `ALTER TABLE social_configs ADD COLUMN filter_districts TEXT NOT NULL DEFAULT '[]'`,
   `ALTER TABLE social_configs ADD COLUMN filter_date_from TEXT`,
   `ALTER TABLE social_configs ADD COLUMN filter_date_to TEXT`
+];
+
+export const SOCIAL_POST_COLUMN_MIGRATIONS = [
+  `ALTER TABLE social_posts ADD COLUMN latitude DOUBLE PRECISION`,
+  `ALTER TABLE social_posts ADD COLUMN longitude DOUBLE PRECISION`,
+  `ALTER TABLE social_posts ADD COLUMN location_label TEXT`,
+  `ALTER TABLE social_posts ADD COLUMN location_confidence TEXT NOT NULL DEFAULT 'low'`,
+  `ALTER TABLE social_posts ADD COLUMN location_status TEXT NOT NULL DEFAULT 'unknown'`,
+  `ALTER TABLE social_posts ADD COLUMN location_source TEXT NOT NULL DEFAULT 'none'`,
+  `ALTER TABLE social_posts ADD COLUMN is_lima_validated INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE social_posts ADD COLUMN confirmed_location_description TEXT`
+];
+
+export const INCIDENT_COLUMN_MIGRATIONS = [
+  `ALTER TABLE incidents ADD COLUMN location_status TEXT`,
+  `ALTER TABLE incidents ADD COLUMN location_confidence TEXT`,
+  `ALTER TABLE incidents ADD COLUMN location_source TEXT`
 ];

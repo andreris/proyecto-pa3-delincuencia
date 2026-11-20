@@ -3,9 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useIncidents } from '../../context/IncidentContext';
 import {
   ALLOWED_SOCIAL_DISTRICTS,
-  DEMO_SOCIAL_POSTS,
-  DISTRICT_APPROX_COORDS,
-  PERU_DISTRICTS
+  DEMO_SOCIAL_POSTS
 } from '../../data/demoData';
 import {
   ApiClientError,
@@ -25,6 +23,7 @@ import {
   SocialSourceAudit
 } from '../../types';
 import { getSafeExternalUrl, sanitizeExternalText } from '../../utils/sanitize';
+import { SocialPostReviewModal } from './SocialPostReviewModal';
 import {
   RefreshCw,
   ExternalLink,
@@ -37,7 +36,6 @@ import {
   Clock,
   Search,
   Save,
-  ShieldAlert,
   MapPin,
   Radio,
   History,
@@ -101,14 +99,8 @@ export const SocialSourcesTab: React.FC = () => {
   const [filterValidationError, setFilterValidationError] = useState<string | null>(null);
   const districtDropdownRef = useRef<HTMLDivElement | null>(null);
 
-  // Create Report modal state
-  const [creatingFromPost, setCreatingFromPost] = useState<SocialPost | null>(null);
-  const [reportDistrict, setReportDistrict] = useState('');
-  const [reportAddress, setReportAddress] = useState('');
-  const [reportTitle, setReportTitle] = useState('');
-  const [reportDescription, setReportDescription] = useState('');
-  const [reportCategory, setReportCategory] = useState<IncidentCategory>('robo');
-  const [reportRiskLevel, setReportRiskLevel] = useState<RiskLevel>('medio');
+  // Geolocation review modal state
+  const [reviewingPost, setReviewingPost] = useState<SocialPost | null>(null);
   const [submittingAction, setSubmittingAction] = useState(false);
 
   // Link Existing modal state
@@ -351,7 +343,7 @@ export const SocialSourcesTab: React.FC = () => {
         setSyncing(false);
         setStatusFilter('Pendiente de validación');
         setSuccessMsg(
-          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración filtradas en Lima y Callao.'
+          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración filtradas en Lima Metropolitana, Perú.'
         );
       }, 400);
       return;
@@ -436,95 +428,125 @@ export const SocialSourcesTab: React.FC = () => {
     }
   };
 
-  const openCreateModal = (post: SocialPost) => {
+  const openReviewModal = (post: SocialPost) => {
     const detected = post.suggestedDistrict || post.detectedDistrict;
-    if (!isModeratorAuthenticated || !detected || detected === 'Sin distrito') return;
-    setCreatingFromPost(post);
-    setReportDistrict(detected);
-    setReportAddress(`Zona aproximada por confirmar en ${detected}`);
-    setReportTitle(`Alerta referencial desde X en ${detected}`);
-    setReportDescription(sanitizeExternalText(post.text, 400));
-    setReportCategory(post.suggestedCategory);
-    setReportRiskLevel(post.suggestedRiskLevel);
+    if (
+      !isModeratorAuthenticated ||
+      !detected ||
+      detected === 'Sin distrito' ||
+      post.locationStatus === 'unknown'
+    ) {
+      return;
+    }
+    setReviewingPost(post);
     setErrorMsg(null);
   };
 
-  const handleConfirmCreateReport = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!creatingFromPost || !isModerator) return;
+  const obfuscateDemoCoords = (lat: number, lng: number) => {
+    const meters = 200 + Math.random() * 300;
+    const angle = Math.random() * 2 * Math.PI;
+    const deltaLat = (meters * Math.cos(angle)) / 111320;
+    const cosLat = Math.max(0.1, Math.cos((lat * Math.PI) / 180));
+    const deltaLng = (meters * Math.sin(angle)) / (111320 * cosLat);
+    return {
+      lat: Number((lat + deltaLat).toFixed(4)),
+      lng: Number((lng + deltaLng).toFixed(4))
+    };
+  };
 
-    if (!reportDistrict.trim()) {
-      setErrorMsg(
-        'Debes seleccionar o confirmar el distrito y ubicación aproximada antes de generar el reporte.'
-      );
-      return;
-    }
-
+  const handleApproveAndPublish = async (payload: {
+    district: string;
+    category: IncidentCategory;
+    riskLevel: RiskLevel;
+    title: string;
+    description: string;
+    latitude: number;
+    longitude: number;
+    locationLabel: string;
+    confirmedLocationDescription: string;
+    movedManually: boolean;
+  }) => {
+    if (!reviewingPost || !isModerator) return;
     setSubmittingAction(true);
     setErrorMsg(null);
 
-    const coords =
-      DISTRICT_APPROX_COORDS[reportDistrict] || DISTRICT_APPROX_COORDS['Lima (Cercado)'];
-
     try {
       if (backendAvailable) {
-        const outcome = await reviewBackendSocialPost(currentUser, creatingFromPost.id, {
-          action: 'create_report',
-          district: reportDistrict,
-          category: reportCategory,
-          riskLevel: reportRiskLevel,
-          title: reportTitle,
-          description: reportDescription,
-          approxAddress: reportAddress || `Zona aproximada en ${reportDistrict}`,
-          approxLat: coords.lat,
-          approxLng: coords.lng
+        const outcome = await reviewBackendSocialPost(currentUser, reviewingPost.id, {
+          action: 'approve_and_publish',
+          district: payload.district,
+          category: payload.category,
+          riskLevel: payload.riskLevel,
+          title: payload.title,
+          description: payload.description,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          locationLabel: payload.locationLabel,
+          confirmedLocationDescription: payload.confirmedLocationDescription,
+          movedManually: payload.movedManually
         });
 
         if (outcome.createdIncident) {
           upsertIncident(outcome.createdIncident);
         }
         setSuccessMsg(
-          `Reporte ${outcome.createdIncident?.id || ''} creado con estado "Pendiente de validación". Revisa y verifícalo en la Cola de Validación para publicarlo en el mapa.`
+          `Reporte ${outcome.createdIncident?.id || ''} aprobado y publicado en el mapa con ubicación aproximada (ofuscada 200–500 m).`
         );
-        setCreatingFromPost(null);
+        setReviewingPost(null);
         await loadBackendSocialData();
       } else {
-        // Demo mode local workflow
         const now = new Date();
-        const jitterLat = (Math.random() - 0.5) * 0.0012;
-        const jitterLng = (Math.random() - 0.5) * 0.0012;
+        const obf = obfuscateDemoCoords(payload.latitude, payload.longitude);
+        const publicLabel = /^ubicaci[oó]n aproximada/i.test(payload.confirmedLocationDescription)
+          ? payload.confirmedLocationDescription
+          : `Ubicación aproximada — ${payload.confirmedLocationDescription}`;
         const newIncident: IncidentReport = {
           id: `VIG-${now.getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-          category: reportCategory,
-          riskLevel: reportRiskLevel,
-          title: sanitizeExternalText(reportTitle, 120),
-          description: sanitizeExternalText(reportDescription, 450),
+          category: payload.category,
+          riskLevel: payload.riskLevel,
+          title: sanitizeExternalText(payload.title, 120),
+          description: sanitizeExternalText(payload.description, 450),
           date: now.toISOString().split('T')[0],
           time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-          district: reportDistrict,
+          district: payload.district,
           approxLocation: {
-            lat: Number((coords.lat + jitterLat).toFixed(5)),
-            lng: Number((coords.lng + jitterLng).toFixed(5)),
-            address: reportAddress || `Zona aproximada en ${reportDistrict}`
+            lat: obf.lat,
+            lng: obf.lng,
+            address: publicLabel
           },
-          status: 'Pendiente de validación',
+          status: 'Verificado',
           isDemo: true,
-          evidenceNote: `Fuente externa: X — ${creatingFromPost.postUrl}`,
+          evidenceNote: `Fuente externa: X — ${reviewingPost.postUrl} • Validado por moderación`,
           falseReportFlags: 0,
           helpfulCount: 1,
           reportedByRole: 'Ciudadano',
           source: 'x',
-          sourceUrl: creatingFromPost.postUrl,
+          sourceUrl: reviewingPost.postUrl,
+          locationStatus: 'moderator_confirmed',
+          locationConfidence: 'high',
+          locationSource: payload.movedManually
+            ? 'moderator_manual'
+            : reviewingPost.locationSource || 'moderator_manual',
           createdAt: now.toISOString()
         };
 
         upsertIncident(newIncident);
         setPosts(prev =>
           prev.map(p =>
-            p.id === creatingFromPost.id
+            p.id === reviewingPost.id
               ? {
                   ...p,
                   status: 'Verificado',
+                  state: 'verified',
+                  suggestedDistrict: payload.district,
+                  detectedDistrict: payload.district,
+                  district: payload.district,
+                  latitude: payload.latitude,
+                  longitude: payload.longitude,
+                  locationLabel: payload.locationLabel,
+                  locationStatus: 'moderator_confirmed',
+                  locationConfidence: 'high',
+                  confirmedLocationDescription: payload.confirmedLocationDescription,
                   linkedIncidentId: newIncident.id,
                   moderatorName: currentUser?.name,
                   reviewedAt: now.toISOString()
@@ -533,12 +555,67 @@ export const SocialSourcesTab: React.FC = () => {
           )
         );
         setSuccessMsg(
-          `Reporte ${newIncident.id} creado en "Pendiente de validación" (Modo demo). Solo aparecerá en el mapa después de verificarlo en "Cola de Validación".`
+          `Reporte ${newIncident.id} aprobado y publicado en el mapa (Modo demo, ubicación aproximada 200–500 m).`
         );
-        setCreatingFromPost(null);
+        setReviewingPost(null);
       }
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Error creando reporte desde publicación.');
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  const handleSaveForReview = async (payload: {
+    district: string;
+    latitude?: number;
+    longitude?: number;
+    locationLabel: string;
+    confirmedLocationDescription: string;
+    movedManually: boolean;
+  }) => {
+    if (!reviewingPost || !isModerator) return;
+    setSubmittingAction(true);
+    setErrorMsg(null);
+
+    try {
+      if (backendAvailable) {
+        await reviewBackendSocialPost(currentUser, reviewingPost.id, {
+          action: 'save_for_review',
+          district: payload.district,
+          latitude: payload.latitude,
+          longitude: payload.longitude,
+          locationLabel: payload.locationLabel,
+          confirmedLocationDescription: payload.confirmedLocationDescription,
+          movedManually: payload.movedManually
+        });
+        setSuccessMsg('Cambios geográficos guardados para revisión posterior (sin publicar en mapa).');
+        setReviewingPost(null);
+        await loadBackendSocialData();
+      } else {
+        setPosts(prev =>
+          prev.map(p =>
+            p.id === reviewingPost.id
+              ? {
+                  ...p,
+                  suggestedDistrict: payload.district,
+                  detectedDistrict: payload.district,
+                  district: payload.district,
+                  latitude: payload.latitude ?? p.latitude,
+                  longitude: payload.longitude ?? p.longitude,
+                  locationLabel: payload.locationLabel || p.locationLabel,
+                  confirmedLocationDescription: payload.confirmedLocationDescription,
+                  locationStatus:
+                    payload.latitude !== undefined && payload.confirmedLocationDescription
+                      ? 'moderator_confirmed'
+                      : p.locationStatus,
+                  locationSource: payload.movedManually ? 'moderator_manual' : p.locationSource,
+                  moderatorName: currentUser?.name
+                }
+              : p
+          )
+        );
+        setSuccessMsg('Borrador de ubicación guardado para revisión posterior (Modo demo).');
+        setReviewingPost(null);
+      }
     } finally {
       setSubmittingAction(false);
     }
@@ -821,7 +898,7 @@ export const SocialSourcesTab: React.FC = () => {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
               <Filter className="w-3.5 h-3.5 text-blue-600" />
-              <span>Filtros de Lima Metropolitana y Callao (importadas y próxima consulta X)</span>
+              <span>Filtros de Lima Metropolitana, Perú (importadas y próxima consulta X)</span>
             </div>
             <span className="text-[11px] text-slate-400 hidden sm:inline">
               {statusInfo?.lastSyncAt
@@ -1140,6 +1217,19 @@ export const SocialSourcesTab: React.FC = () => {
               post.suggestedDistrict || post.detectedDistrict || 'Sin distrito';
             const hasConfirmedDistrict =
               Boolean(detectedDistrict) && detectedDistrict !== 'Sin distrito';
+            const locStatus = post.locationStatus || 'unknown';
+            const locConfidence = post.locationConfidence || 'low';
+            const canCreateFromPost =
+              isModeratorAuthenticated && hasConfirmedDistrict && locStatus !== 'unknown';
+
+            const statusLabel =
+              locStatus === 'moderator_confirmed'
+                ? 'Ubicación confirmada por moderador'
+                : locStatus === 'exact_candidate'
+                ? 'Candidato de dirección/coordenada'
+                : locStatus === 'district_only'
+                ? 'Solo distrito (área general, sin pin público)'
+                : 'Sin ubicación suficiente';
 
             return (
               <div
@@ -1158,6 +1248,12 @@ export const SocialSourcesTab: React.FC = () => {
                     {post.isDemo && (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
                         Modo demo
+                      </span>
+                    )}
+                    {post.isLimaValidated && post.status !== 'Descartado' && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        Ubicación validada: Lima Metropolitana, Perú
                       </span>
                     )}
                     <span className="text-[11px] text-slate-400 flex items-center gap-1">
@@ -1184,7 +1280,7 @@ export const SocialSourcesTab: React.FC = () => {
                   {safeExcerpt}
                 </p>
 
-                {/* Metadata tags */}
+                {/* Metadata & Geolocation tags */}
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border font-semibold ${
@@ -1197,9 +1293,29 @@ export const SocialSourcesTab: React.FC = () => {
                     Distrito detectado: {detectedDistrict}
                   </span>
 
-                  <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-mono">
-                    Consulta: {sanitizeExternalText(post.queryUsed, 90)}
+                  <span
+                    className={`px-2.5 py-1 rounded-lg border font-semibold ${
+                      locStatus === 'exact_candidate' || locStatus === 'moderator_confirmed'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : locStatus === 'district_only'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {statusLabel} • Confianza: {locConfidence}
                   </span>
+
+                  {post.locationLabel && (
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-50 text-slate-700 border border-slate-200">
+                      Ref.: {sanitizeExternalText(post.locationLabel, 90)}
+                    </span>
+                  )}
+
+                  {typeof post.latitude === 'number' && typeof post.longitude === 'number' && (
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-mono text-[10px]">
+                      {post.latitude.toFixed(4)}, {post.longitude.toFixed(4)}
+                    </span>
+                  )}
 
                   {safeUrl && (
                     <a
@@ -1228,12 +1344,14 @@ export const SocialSourcesTab: React.FC = () => {
                 {isPending ? (
                   <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
                     <button
-                      onClick={() => openCreateModal(post)}
-                      disabled={!isModeratorAuthenticated || !hasConfirmedDistrict}
+                      onClick={() => openReviewModal(post)}
+                      disabled={!canCreateFromPost}
                       title={
-                        !hasConfirmedDistrict
-                          ? 'Se requiere un distrito permitido confirmado para crear reporte'
-                          : 'Crear reporte en Pendiente de validación'
+                        !isModeratorAuthenticated
+                          ? 'Autentícate como moderador para revisar'
+                          : locStatus === 'unknown' || !hasConfirmedDistrict
+                          ? 'Sin ubicación suficiente: no se permite crear reporte'
+                          : 'Revisar mapa y confirmar ubicación antes de publicar'
                       }
                       className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
                     >
@@ -1303,144 +1421,22 @@ export const SocialSourcesTab: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 1: Create IncidentReport from SocialPost (requires moderator location confirmation) */}
-      {creatingFromPost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200">
-            <div className="bg-[#0B1F3A] text-white p-5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-blue-400" />
-                <div>
-                  <h3 className="font-bold text-sm">Crear reporte desde publicación de X</h3>
-                  <p className="text-[11px] text-blue-200">
-                    Ingresará como “Pendiente de validación” y requerirá confirmación geográfica
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setCreatingFromPost(null)}
-                className="text-slate-300 hover:text-white text-sm font-bold px-2"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmCreateReport} className="p-5 space-y-3.5 max-h-[78vh] overflow-y-auto text-xs">
-              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px]">
-                <strong>Regla de privacidad:</strong> Nunca se infiere ubicación exacta desde el perfil o texto de X. Selecciona y confirma manualmente el distrito y una referencia aproximada antes de crear el reporte.
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-800 mb-1">
-                  Distrito confirmado por moderador *
-                </label>
-                <select
-                  value={reportDistrict}
-                  onChange={e => setReportDistrict(e.target.value)}
-                  required
-                  className="w-full p-2.5 rounded-xl border border-slate-200 bg-white"
-                >
-                  <option value="">-- Selecciona un distrito para confirmar --</option>
-                  {PERU_DISTRICTS.filter(d => d !== 'Todos los distritos').map(d => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-800 mb-1">
-                  Referencia aproximada (no domicilio exacto)
-                </label>
-                <input
-                  type="text"
-                  value={reportAddress}
-                  onChange={e => setReportAddress(e.target.value)}
-                  placeholder="Ej: Zona referencial cerca a avenida principal"
-                  className="w-full p-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-800 mb-1">Categoría</label>
-                  <select
-                    value={reportCategory}
-                    onChange={e => setReportCategory(e.target.value as IncidentCategory)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 bg-white"
-                  >
-                    <option value="robo">Robo</option>
-                    <option value="asalto">Asalto</option>
-                    <option value="extorsion">Extorsión</option>
-                    <option value="accidente">Accidente</option>
-                    <option value="actividad_sospechosa">Actividad sospechosa</option>
-                    <option value="hurto_menor">Hurto menor</option>
-                    <option value="otro">Otro</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-800 mb-1">Nivel de riesgo</label>
-                  <select
-                    value={reportRiskLevel}
-                    onChange={e => setReportRiskLevel(e.target.value as RiskLevel)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 bg-white"
-                  >
-                    <option value="alto">🔴 Alto</option>
-                    <option value="medio">🟡 Medio</option>
-                    <option value="informativo">🔵 Informativo</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-800 mb-1">Título del reporte *</label>
-                <input
-                  type="text"
-                  value={reportTitle}
-                  onChange={e => setReportTitle(e.target.value)}
-                  required
-                  maxLength={120}
-                  className="w-full p-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-800 mb-1">
-                  Descripción redactada sin datos personales *
-                </label>
-                <textarea
-                  rows={3}
-                  value={reportDescription}
-                  onChange={e => setReportDescription(e.target.value)}
-                  required
-                  className="w-full p-2.5 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
-                <strong>Evidencia generada:</strong> Fuente externa: X ({creatingFromPost.postUrl})
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setCreatingFromPost(null)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={submittingAction || !reportDistrict.trim() || reportDistrict === 'Sin distrito'}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold shadow-sm"
-                >
-                  {submittingAction ? 'Creando...' : 'Crear reporte pendiente'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {/* MODAL 1: Geolocation & Human Review Modal (before publishing to map) */}
+      {reviewingPost && (
+        <SocialPostReviewModal
+          post={reviewingPost}
+          backendAvailable={backendAvailable}
+          submitting={submittingAction}
+          onClose={() => setReviewingPost(null)}
+          onApproveAndPublish={handleApproveAndPublish}
+          onSaveForReview={handleSaveForReview}
+          onDiscard={async reason => {
+            await handleDiscardPost(reviewingPost);
+            if (reason) {
+              setReviewingPost(null);
+            }
+          }}
+        />
       )}
 
       {/* MODAL 2: Link SocialPost to existing IncidentReport */}

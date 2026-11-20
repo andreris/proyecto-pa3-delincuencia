@@ -11,6 +11,22 @@ export type RiskLevel = 'alto' | 'medio' | 'informativo';
 
 export type ReportStatus = 'Pendiente de validación' | 'Verificado' | 'Descartado';
 
+export type LocationConfidence = 'high' | 'medium' | 'low';
+
+export type LocationStatus =
+  | 'exact_candidate'
+  | 'district_only'
+  | 'unknown'
+  | 'moderator_confirmed';
+
+export type LocationSource =
+  | 'text_geocoded'
+  | 'x_coordinates'
+  | 'x_place'
+  | 'district_centroid'
+  | 'moderator_manual'
+  | 'none';
+
 export interface IncidentReport {
   id: string;
   category: IncidentCategory;
@@ -33,6 +49,9 @@ export interface IncidentReport {
   reportedByRole: 'Peatón' | 'Conductor' | 'Comerciante' | 'Ciudadano';
   source?: 'citizen' | 'x';
   sourceUrl?: string;
+  locationStatus?: LocationStatus;
+  locationConfidence?: LocationConfidence;
+  locationSource?: LocationSource;
   createdAt: string;
 }
 
@@ -55,6 +74,15 @@ export interface SocialPost {
   suggestedRiskLevel: RiskLevel;
   suggestedDistrict?: string;
   detectedDistrict?: string;
+  district?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationLabel?: string;
+  locationConfidence?: LocationConfidence;
+  locationStatus?: LocationStatus;
+  locationSource?: LocationSource;
+  isLimaValidated?: boolean;
+  confirmedLocationDescription?: string;
   moderatorId?: string;
   moderatorName?: string;
   reviewReason?: string;
@@ -68,6 +96,7 @@ export interface SocialSourceAudit {
   actionType:
     | 'x_sync'
     | 'social_post_approved'
+    | 'social_post_saved'
     | 'social_post_linked'
     | 'social_post_discarded'
     | 'social_query_updated'

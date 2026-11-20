@@ -5,8 +5,10 @@ import {
   sanitizeAllowedDistricts,
   sanitizeExternalText,
   sanitizeXPostUrl,
-  validateAndClassifyXPost
+  validateAndGeolocateXPost,
+  XGeoInput
 } from '../utils/sanitize.js';
+import { GeocoderService } from './geocoderService.js';
 import {
   EvaluatedSocialPostInput,
   getOrCreateSocialConfig,
@@ -25,10 +27,31 @@ export interface XApiTweet {
   created_at?: string;
   lang?: string;
   referenced_tweets?: Array<{ type: string; id?: string }>;
+  geo?: {
+    place_id?: string;
+    coordinates?: {
+      type?: string;
+      coordinates?: [number, number];
+    };
+  };
+}
+
+export interface XApiPlace {
+  id: string;
+  country?: string;
+  country_code?: string;
+  full_name?: string;
+  name?: string;
+  geo?: {
+    bbox?: number[];
+  };
 }
 
 export interface XApiRecentSearchResponse {
   data?: XApiTweet[];
+  includes?: {
+    places?: XApiPlace[];
+  };
   meta?: {
     newest_id?: string;
     oldest_id?: string;
@@ -189,10 +212,20 @@ export class XService {
   private isSyncing = false;
   private readonly fetchImpl: FetchLike;
   private readonly apiBaseUrl: string;
+  private readonly geocoder: GeocoderService;
 
-  constructor(options?: { fetchImpl?: FetchLike; apiBaseUrl?: string }) {
+  constructor(options?: {
+    fetchImpl?: FetchLike;
+    apiBaseUrl?: string;
+    geocoder?: GeocoderService;
+  }) {
     this.fetchImpl = options?.fetchImpl || (globalThis.fetch as unknown as FetchLike);
     this.apiBaseUrl = options?.apiBaseUrl || 'https://api.x.com/2';
+    this.geocoder = options?.geocoder || new GeocoderService();
+  }
+
+  public getGeocoder(): GeocoderService {
+    return this.geocoder;
   }
 
   public isTokenConfigured(): boolean {
@@ -298,9 +331,10 @@ export class XService {
       const params = new URLSearchParams({
         query,
         max_results: String(HARD_MAX_POSTS_PER_SYNC),
-        // Privacy-minimal fields: public post text, timestamp & retweet ref only.
-        // No user profile expansion, no followers, no private messages, no geo.
-        'tweet.fields': 'created_at,lang,referenced_tweets'
+        // Privacy-minimal fields: public post text, timestamp, retweet ref, and optional public geo place/coords (treated strictly as candidate)
+        'tweet.fields': 'created_at,lang,referenced_tweets,geo',
+        expansions: 'geo.place_id',
+        'place.fields': 'country,country_code,full_name,name,geo'
       });
 
       if (startTimeIso) {
@@ -365,37 +399,86 @@ export class XService {
       }
 
       const rawTweets = Array.isArray(payload.data) ? payload.data : [];
+      const placesMap = new Map<string, XApiPlace>();
+      for (const place of payload.includes?.places || []) {
+        if (place && place.id) {
+          placesMap.set(place.id, place);
+        }
+      }
+
       // Enforce strict server-side cap regardless of upstream/mock payload size
       const cappedTweets = rawTweets
         .filter(t => t && typeof t.id === 'string' && typeof t.text === 'string')
         .slice(0, maxPostsLimit);
 
-      const evaluatedPosts: EvaluatedSocialPostInput[] = cappedTweets.map(tweet => {
-        const safeText = sanitizeExternalText(tweet.text, 500);
-        const publishedAt = tweet.created_at || new Date().toISOString();
-        const outcome = validateAndClassifyXPost({
-          text: tweet.text,
-          publishedAt,
-          referencedTweets: tweet.referenced_tweets,
-          selectedDistricts: effectiveDistricts,
-          dateFrom,
-          dateTo
-        });
+      const evaluatedPosts: EvaluatedSocialPostInput[] = await Promise.all(
+        cappedTweets.map(async tweet => {
+          const safeText = sanitizeExternalText(tweet.text, 500);
+          const publishedAt = tweet.created_at || new Date().toISOString();
 
-        return {
-          platform: 'x' as const,
-          externalPostId: tweet.id,
-          postUrl: sanitizeXPostUrl(`https://x.com/i/web/status/${tweet.id}`, tweet.id),
-          text: safeText,
-          publishedAt,
-          queryUsed: query,
-          suggestedCategory: outcome.suggestedCategory,
-          suggestedRiskLevel: outcome.suggestedRiskLevel,
-          suggestedDistrict: outcome.detectedDistrict,
-          status: outcome.accepted ? 'Pendiente de validación' : 'Descartado',
-          reviewReason: outcome.discardReason
-        };
-      });
+          const rawCoords = tweet.geo?.coordinates?.coordinates;
+          const hasPairCoords =
+            Array.isArray(rawCoords) &&
+            rawCoords.length >= 2 &&
+            typeof rawCoords[0] === 'number' &&
+            typeof rawCoords[1] === 'number' &&
+            Number.isFinite(rawCoords[0]) &&
+            Number.isFinite(rawCoords[1]);
+          const matchedPlace = tweet.geo?.place_id
+            ? placesMap.get(tweet.geo.place_id)
+            : undefined;
+
+          const xGeo: XGeoInput | undefined =
+            hasPairCoords || matchedPlace
+              ? {
+                  // X GeoJSON coordinates are [longitude, latitude]
+                  coordinates: hasPairCoords
+                    ? { lat: rawCoords![1], lng: rawCoords![0] }
+                    : undefined,
+                  place: matchedPlace
+                    ? {
+                        countryCode: matchedPlace.country_code,
+                        country: matchedPlace.country,
+                        fullName: matchedPlace.full_name,
+                        name: matchedPlace.name
+                      }
+                    : undefined
+                }
+              : undefined;
+
+          const outcome = await validateAndGeolocateXPost({
+            text: tweet.text,
+            publishedAt,
+            referencedTweets: tweet.referenced_tweets,
+            xGeo,
+            selectedDistricts: effectiveDistricts,
+            dateFrom,
+            dateTo,
+            geocoder: this.geocoder
+          });
+
+          return {
+            platform: 'x' as const,
+            externalPostId: tweet.id,
+            postUrl: sanitizeXPostUrl(`https://x.com/i/web/status/${tweet.id}`, tweet.id),
+            text: safeText,
+            publishedAt,
+            queryUsed: query,
+            suggestedCategory: outcome.suggestedCategory,
+            suggestedRiskLevel: outcome.suggestedRiskLevel,
+            suggestedDistrict: outcome.detectedDistrict,
+            latitude: outcome.latitude,
+            longitude: outcome.longitude,
+            locationLabel: outcome.locationLabel,
+            locationConfidence: outcome.locationConfidence,
+            locationStatus: outcome.locationStatus,
+            locationSource: outcome.locationSource,
+            isLimaValidated: outcome.isLimaValidated,
+            status: outcome.accepted ? 'Pendiente de validación' : 'Descartado',
+            reviewReason: outcome.discardReason
+          };
+        })
+      );
 
       const { imported, discarded, duplicatesSkipped } = await insertSocialPostsDeduped(
         db,

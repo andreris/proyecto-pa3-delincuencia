@@ -4,6 +4,9 @@ import {
   AuthenticatedUser,
   IncidentCategory,
   IncidentReportRecord,
+  LocationConfidence,
+  LocationSource,
+  LocationStatus,
   ReportStatus,
   RiskLevel,
   SocialPostRecord,
@@ -12,12 +15,16 @@ import {
   SocialSourceConfig
 } from '../types.js';
 import {
+  ALLOWED_SOCIAL_DISTRICT_SET,
   buildXRecentSearchQuery,
   DISTRICT_APPROX_CENTERS,
+  obfuscateCoordinatesForPublicMap,
   sanitizeAllowedDistricts,
   sanitizeExternalText,
+  sanitizePublicLocationLabel,
   sanitizeXPostUrl
 } from '../utils/sanitize.js';
+import { isWithinLimaMetroBounds } from './geocoderService.js';
 import { recordAuditLog } from './auditService.js';
 
 export const DEFAULT_X_QUERY = buildXRecentSearchQuery();
@@ -42,6 +49,9 @@ interface IncidentRow {
   reported_by_role: IncidentReportRecord['reportedByRole'];
   source: 'citizen' | 'x';
   source_url: string | null;
+  location_status: LocationStatus | null;
+  location_confidence: LocationConfidence | null;
+  location_source: LocationSource | null;
   created_at: string;
 }
 
@@ -58,6 +68,14 @@ interface SocialPostRow {
   suggested_category: IncidentCategory;
   suggested_risk_level: RiskLevel;
   suggested_district: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  location_label: string | null;
+  location_confidence: LocationConfidence | null;
+  location_status: LocationStatus | null;
+  location_source: LocationSource | null;
+  is_lima_validated: number | null;
+  confirmed_location_description: string | null;
   moderator_id: string | null;
   moderator_name: string | null;
   review_reason: string | null;
@@ -139,6 +157,9 @@ function mapIncidentRow(row: IncidentRow): IncidentReportRecord {
     reportedByRole: row.reported_by_role,
     source: row.source || 'citizen',
     sourceUrl: row.source_url ?? undefined,
+    locationStatus: row.location_status ?? undefined,
+    locationConfidence: row.location_confidence ?? undefined,
+    locationSource: row.location_source ?? undefined,
     createdAt: row.created_at
   };
 }
@@ -152,6 +173,18 @@ function mapSocialPostState(status: SocialPostStatus): SocialPostState {
 function mapSocialPostRow(row: SocialPostRow): SocialPostRecord {
   // Note: author_username is intentionally NEVER returned in API DTOs
   const detectedDistrict = row.suggested_district ?? undefined;
+  const lat =
+    row.latitude !== null && row.latitude !== undefined && Number.isFinite(Number(row.latitude))
+      ? Number(row.latitude)
+      : null;
+  const lng =
+    row.longitude !== null && row.longitude !== undefined && Number.isFinite(Number(row.longitude))
+      ? Number(row.longitude)
+      : null;
+  const locationStatus: LocationStatus = row.location_status || 'unknown';
+  const locationConfidence: LocationConfidence = row.location_confidence || 'low';
+  const locationSource: LocationSource = row.location_source || 'none';
+
   return {
     id: row.id,
     platform: row.platform,
@@ -168,6 +201,15 @@ function mapSocialPostRow(row: SocialPostRow): SocialPostRecord {
     suggestedRiskLevel: row.suggested_risk_level,
     suggestedDistrict: detectedDistrict,
     detectedDistrict: detectedDistrict || 'Sin distrito',
+    district: detectedDistrict || 'Sin distrito',
+    latitude: lat,
+    longitude: lng,
+    locationLabel: row.location_label ?? undefined,
+    locationConfidence,
+    locationStatus,
+    locationSource,
+    isLimaValidated: Boolean(row.is_lima_validated),
+    confirmedLocationDescription: row.confirmed_location_description ?? undefined,
     moderatorId: row.moderator_id ?? undefined,
     moderatorName: row.moderator_name ?? undefined,
     reviewReason: row.review_reason ?? undefined,
@@ -340,6 +382,13 @@ export interface EvaluatedSocialPostInput {
   suggestedCategory: IncidentCategory;
   suggestedRiskLevel: RiskLevel;
   suggestedDistrict?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationLabel?: string | null;
+  locationConfidence?: LocationConfidence;
+  locationStatus?: LocationStatus;
+  locationSource?: LocationSource;
+  isLimaValidated?: boolean;
   status?: SocialPostStatus;
   reviewReason?: string;
 }
@@ -381,16 +430,34 @@ export async function insertSocialPostsDeduped(
     const safeReason = post.reviewReason
       ? sanitizeExternalText(post.reviewReason, 240)
       : undefined;
-    const moderatorName = isDiscarded ? 'Filtro automático Lima/Callao' : null;
+    const moderatorName = isDiscarded ? 'Filtro automático Lima Metropolitana' : null;
     const reviewedAt = isDiscarded ? importedAt : null;
     const districtValue = post.suggestedDistrict || (isDiscarded ? 'Sin distrito' : null);
+
+    const latValue =
+      typeof post.latitude === 'number' && Number.isFinite(post.latitude)
+        ? Number(post.latitude.toFixed(5))
+        : null;
+    const lngValue =
+      typeof post.longitude === 'number' && Number.isFinite(post.longitude)
+        ? Number(post.longitude.toFixed(5))
+        : null;
+    const safeLabel = post.locationLabel
+      ? sanitizeExternalText(post.locationLabel, 200)
+      : null;
+    const locationConfidence: LocationConfidence = post.locationConfidence || 'low';
+    const locationStatus: LocationStatus = post.locationStatus || 'unknown';
+    const locationSource: LocationSource = post.locationSource || 'none';
+    const isLimaValidated = Boolean(post.isLimaValidated && !isDiscarded);
 
     const result = await db.execute(
       `INSERT INTO social_posts (
         id, platform, external_post_id, post_url, text, published_at, imported_at,
         author_username, query_used, status, suggested_category, suggested_risk_level,
-        suggested_district, moderator_name, review_reason, reviewed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+        suggested_district, latitude, longitude, location_label, location_confidence,
+        location_status, location_source, is_lima_validated,
+        moderator_name, review_reason, reviewed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(external_post_id) DO NOTHING`,
       [
         id,
@@ -405,6 +472,13 @@ export async function insertSocialPostsDeduped(
         post.suggestedCategory,
         post.suggestedRiskLevel,
         districtValue,
+        latValue,
+        lngValue,
+        safeLabel,
+        locationConfidence,
+        locationStatus,
+        locationSource,
+        isLimaValidated ? 1 : 0,
         moderatorName,
         safeReason ?? null,
         reviewedAt
@@ -432,6 +506,14 @@ export async function insertSocialPostsDeduped(
       suggestedRiskLevel: post.suggestedRiskLevel,
       suggestedDistrict: districtValue ?? undefined,
       detectedDistrict: districtValue ?? 'Sin distrito',
+      district: districtValue ?? 'Sin distrito',
+      latitude: latValue,
+      longitude: lngValue,
+      locationLabel: safeLabel ?? undefined,
+      locationConfidence,
+      locationStatus,
+      locationSource,
+      isLimaValidated,
       moderatorName: moderatorName ?? undefined,
       reviewReason: safeReason,
       reviewedAt: reviewedAt ?? undefined
@@ -512,6 +594,8 @@ export async function listSocialPosts(
   // Strictly select safe columns; omit author_username
   const sql = `SELECT id, platform, external_post_id, post_url, text, published_at, imported_at,
             query_used, status, suggested_category, suggested_risk_level, suggested_district,
+            latitude, longitude, location_label, location_confidence, location_status,
+            location_source, is_lima_validated, confirmed_location_description,
             moderator_id, moderator_name, review_reason, reviewed_at, linked_incident_id
      FROM social_posts
      ${whereClause}
@@ -564,25 +648,45 @@ export async function createIncident(
     time: string;
     district: string;
     approxLocation: { lat: number; lng: number; address: string };
+    status?: ReportStatus;
     evidenceNote?: string;
     reportedByRole?: IncidentReportRecord['reportedByRole'];
     source?: 'citizen' | 'x';
     sourceUrl?: string;
+    locationStatus?: LocationStatus;
+    locationConfidence?: LocationConfidence;
+    locationSource?: LocationSource;
     isDemo?: boolean;
   }
 ): Promise<IncidentReportRecord> {
   const id = `VIG-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
   const createdAt = new Date().toISOString();
+  const initialStatus: ReportStatus = input.status || 'Pendiente de validación';
+  const source = input.source || 'citizen';
 
-  // Privacy jitter ~100m
-  const jitterLat = (Math.random() - 0.5) * 0.0012;
-  const jitterLng = (Math.random() - 0.5) * 0.0012;
-  const lat = Number((input.approxLocation.lat + jitterLat).toFixed(5));
-  const lng = Number((input.approxLocation.lng + jitterLng).toFixed(5));
-  const address = sanitizeExternalText(
-    input.approxLocation.address || `Zona referencial en ${input.district}`,
-    180
-  );
+  // For X-sourced / moderator-confirmed reports, strictly obfuscate 200-500m and label "Ubicación aproximada"
+  let lat: number;
+  let lng: number;
+  let address: string;
+
+  if (source === 'x' || input.locationStatus === 'moderator_confirmed') {
+    const obfuscated = obfuscateCoordinatesForPublicMap(
+      input.approxLocation.lat,
+      input.approxLocation.lng
+    );
+    lat = obfuscated.lat;
+    lng = obfuscated.lng;
+    address = sanitizePublicLocationLabel(input.approxLocation.address, input.district);
+  } else {
+    const jitterLat = (Math.random() - 0.5) * 0.0012;
+    const jitterLng = (Math.random() - 0.5) * 0.0012;
+    lat = Number((input.approxLocation.lat + jitterLat).toFixed(5));
+    lng = Number((input.approxLocation.lng + jitterLng).toFixed(5));
+    address = sanitizeExternalText(
+      input.approxLocation.address || `Ubicación aproximada en ${input.district}`,
+      180
+    );
+  }
 
   const safeTitle = sanitizeExternalText(input.title, 120);
   const safeDescription = sanitizeExternalText(input.description, 500);
@@ -594,8 +698,9 @@ export async function createIncident(
     `INSERT INTO incidents (
       id, category, risk_level, title, description, date, time, district,
       approx_lat, approx_lng, approx_address, status, is_demo, evidence_note,
-      false_report_flags, helpful_count, reported_by_role, source, source_url, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente de validación', ?, ?, 0, 1, ?, ?, ?, ?)`,
+      false_report_flags, helpful_count, reported_by_role, source, source_url,
+      location_status, location_confidence, location_source, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.category,
@@ -608,11 +713,15 @@ export async function createIncident(
       lat,
       lng,
       address,
+      initialStatus,
       input.isDemo ? 1 : 0,
       safeEvidence ?? null,
       input.reportedByRole || 'Ciudadano',
-      input.source || 'citizen',
+      source,
       input.sourceUrl ?? null,
+      input.locationStatus ?? null,
+      input.locationConfidence ?? null,
+      input.locationSource ?? null,
       createdAt
     ]
   );
@@ -627,14 +736,17 @@ export async function createIncident(
     time: input.time,
     district: input.district,
     approxLocation: { lat, lng, address },
-    status: 'Pendiente de validación',
+    status: initialStatus,
     isDemo: Boolean(input.isDemo),
     evidenceNote: safeEvidence,
     falseReportFlags: 0,
     helpfulCount: 1,
     reportedByRole: input.reportedByRole || 'Ciudadano',
-    source: input.source || 'citizen',
+    source,
     sourceUrl: input.sourceUrl,
+    locationStatus: input.locationStatus,
+    locationConfidence: input.locationConfidence,
+    locationSource: input.locationSource,
     createdAt
   };
 }
@@ -666,9 +778,9 @@ export async function reviewIncident(
 }
 
 export interface ReviewSocialPostPayload {
-  action: 'create_report' | 'link_incident' | 'discard';
+  action: 'approve_and_publish' | 'save_for_review' | 'create_report' | 'link_incident' | 'discard';
   reviewReason?: string;
-  // Fields when action === 'create_report'
+  // Geolocation & report fields
   district?: string;
   category?: IncidentCategory;
   riskLevel?: RiskLevel;
@@ -677,6 +789,11 @@ export interface ReviewSocialPostPayload {
   approxAddress?: string;
   approxLat?: number;
   approxLng?: number;
+  latitude?: number;
+  longitude?: number;
+  locationLabel?: string;
+  confirmedLocationDescription?: string;
+  movedManually?: boolean;
   // Field when action === 'link_incident'
   linkedIncidentId?: string;
 }
@@ -693,6 +810,8 @@ export async function reviewSocialPost(
   const row = await db.get<SocialPostRow>(
     `SELECT id, platform, external_post_id, post_url, text, published_at, imported_at,
             query_used, status, suggested_category, suggested_risk_level, suggested_district,
+            latitude, longitude, location_label, location_confidence, location_status,
+            location_source, is_lima_validated, confirmed_location_description,
             moderator_id, moderator_name, review_reason, reviewed_at, linked_incident_id
      FROM social_posts WHERE id = ?`,
     [postId]
@@ -732,6 +851,7 @@ export async function reviewSocialPost(
       post: {
         ...post,
         status: 'Descartado',
+        state: 'discarded',
         moderatorId: moderator.uid,
         moderatorName: moderator.name,
         reviewReason: reason,
@@ -778,6 +898,7 @@ export async function reviewSocialPost(
       post: {
         ...post,
         status: 'Verificado',
+        state: 'verified',
         moderatorId: moderator.uid,
         moderatorName: moderator.name,
         reviewReason: reason,
@@ -787,31 +908,273 @@ export async function reviewSocialPost(
     };
   }
 
-  // action === 'create_report'
   if (post.status === 'Descartado') {
     throw new Error(
-      'BAD_REQUEST: No se puede crear un reporte desde una publicación descartada.'
+      'BAD_REQUEST: No se puede aprobar ni crear un reporte desde una publicación descartada.'
     );
   }
 
-  const confirmedDistrict = (payload.district || '').trim();
-  if (!confirmedDistrict || confirmedDistrict === 'Sin distrito') {
+  // Normalize canonical district from payload or post (explicit payload.district required for publish/create)
+  const rawDistrict = (
+    payload.action === 'save_for_review'
+      ? payload.district || post.suggestedDistrict || ''
+      : payload.district || ''
+  ).trim();
+  const canonicalDistrict = sanitizeAllowedDistricts([rawDistrict])[0] || '';
+
+  if (payload.action === 'save_for_review') {
+    if (rawDistrict && !canonicalDistrict) {
+      throw new Error(
+        'BAD_REQUEST: El distrito debe pertenecer a la lista permitida de Lima Metropolitana.'
+      );
+    }
+
+    const targetDistrict = canonicalDistrict || post.suggestedDistrict || 'Sin distrito';
+    const reqLat = payload.latitude ?? payload.approxLat;
+    const reqLng = payload.longitude ?? payload.approxLng;
+    const hasCustomCoords =
+      typeof reqLat === 'number' &&
+      Number.isFinite(reqLat) &&
+      typeof reqLng === 'number' &&
+      Number.isFinite(reqLng);
+
+    if (hasCustomCoords && !isWithinLimaMetroBounds(reqLat!, reqLng!)) {
+      throw new Error(
+        'BAD_REQUEST: Las coordenadas seleccionadas están fuera de Lima Metropolitana, Perú.'
+      );
+    }
+
+    const nextLat = hasCustomCoords ? Number(reqLat!.toFixed(5)) : post.latitude ?? null;
+    const nextLng = hasCustomCoords ? Number(reqLng!.toFixed(5)) : post.longitude ?? null;
+    const safeDesc = payload.confirmedLocationDescription
+      ? sanitizeExternalText(payload.confirmedLocationDescription, 220)
+      : post.confirmedLocationDescription;
+    const safeLabel = payload.locationLabel
+      ? sanitizeExternalText(payload.locationLabel, 200)
+      : post.locationLabel;
+
+    const nextStatus: LocationStatus =
+      nextLat !== null && nextLng !== null && safeDesc
+        ? 'moderator_confirmed'
+        : post.locationStatus;
+    const nextSource: LocationSource = payload.movedManually
+      ? 'moderator_manual'
+      : post.locationSource;
+    const nextConfidence: LocationConfidence =
+      nextLat !== null && nextLng !== null ? 'high' : post.locationConfidence;
+
+    await db.execute(
+      `UPDATE social_posts
+       SET suggested_district = ?, latitude = ?, longitude = ?, location_label = ?,
+           location_confidence = ?, location_status = ?, location_source = ?,
+           is_lima_validated = ?, confirmed_location_description = ?,
+           moderator_id = ?, moderator_name = ?, reviewed_at = ?
+       WHERE id = ?`,
+      [
+        targetDistrict === 'Sin distrito' ? null : targetDistrict,
+        nextLat,
+        nextLng,
+        safeLabel ?? null,
+        nextConfidence,
+        nextStatus,
+        nextSource,
+        canonicalDistrict ? 1 : post.isLimaValidated ? 1 : 0,
+        safeDesc ?? null,
+        moderator.uid,
+        moderator.name,
+        now,
+        postId
+      ]
+    );
+
+    await recordAuditLog(db, {
+      actionType: 'social_post_saved',
+      actorId: moderator.uid,
+      actorName: moderator.name,
+      actorRole: moderator.role,
+      targetType: 'social_post',
+      targetId: postId,
+      details: `Publicación X (${post.externalPostId}) guardada para revisión posterior en ${targetDistrict} (sin publicar en mapa).`
+    });
+
+    return {
+      post: {
+        ...post,
+        status: 'Pendiente de validación',
+        state: 'pending_validation',
+        suggestedDistrict: targetDistrict === 'Sin distrito' ? undefined : targetDistrict,
+        detectedDistrict: targetDistrict,
+        district: targetDistrict,
+        latitude: nextLat,
+        longitude: nextLng,
+        locationLabel: safeLabel,
+        locationConfidence: nextConfidence,
+        locationStatus: nextStatus,
+        locationSource: nextSource,
+        isLimaValidated: Boolean(canonicalDistrict || post.isLimaValidated),
+        confirmedLocationDescription: safeDesc,
+        moderatorId: moderator.uid,
+        moderatorName: moderator.name,
+        reviewedAt: now
+      }
+    };
+  }
+
+  // Approve & publish (direct verified map pin with 200-500m obfuscation) OR legacy create_report (pending verification)
+  if (!canonicalDistrict || !ALLOWED_SOCIAL_DISTRICT_SET.has(canonicalDistrict)) {
     throw new Error(
-      'BAD_REQUEST: El moderador debe seleccionar o confirmar un distrito válido antes de crear el reporte.'
+      'BAD_REQUEST: El moderador debe confirmar un distrito permitido de Lima Metropolitana antes de crear el reporte.'
+    );
+  }
+
+  const reqLat = payload.latitude ?? payload.approxLat ?? post.latitude ?? undefined;
+  const reqLng = payload.longitude ?? payload.approxLng ?? post.longitude ?? undefined;
+
+  if (payload.action === 'approve_and_publish') {
+    if (
+      typeof reqLat !== 'number' ||
+      !Number.isFinite(reqLat) ||
+      typeof reqLng !== 'number' ||
+      !Number.isFinite(reqLng) ||
+      !isWithinLimaMetroBounds(reqLat, reqLng)
+    ) {
+      throw new Error(
+        'BAD_REQUEST: Debes fijar un pin válido dentro de Lima Metropolitana en el mapa antes de aprobar y publicar.'
+      );
+    }
+
+    const confirmedDesc = sanitizeExternalText(
+      payload.confirmedLocationDescription || payload.approxAddress || '',
+      220
+    );
+    if (!confirmedDesc || confirmedDesc.length < 4) {
+      throw new Error(
+        'BAD_REQUEST: La descripción de ubicación confirmada es obligatoria para aprobar y publicar.'
+      );
+    }
+
+    const publishedDate = new Date(post.publishedAt);
+    const validDate = !Number.isNaN(publishedDate.getTime()) ? publishedDate : new Date();
+    const dateStr = validDate.toISOString().split('T')[0];
+    const timeStr = `${String(validDate.getHours()).padStart(2, '0')}:${String(validDate.getMinutes()).padStart(2, '0')}`;
+    const finalSource: LocationSource = payload.movedManually
+      ? 'moderator_manual'
+      : post.locationSource === 'x_coordinates' || post.locationSource === 'text_geocoded'
+      ? post.locationSource
+      : 'moderator_manual';
+
+    const createdIncident = await createIncident(db, {
+      category: payload.category || post.suggestedCategory,
+      riskLevel: payload.riskLevel || post.suggestedRiskLevel,
+      title: payload.title || `Alerta ciudadana confirmada en ${canonicalDistrict}`,
+      description: payload.description || post.text,
+      date: dateStr,
+      time: timeStr,
+      district: canonicalDistrict,
+      approxLocation: {
+        lat: reqLat,
+        lng: reqLng,
+        address: confirmedDesc
+      },
+      status: 'Verificado',
+      evidenceNote: `Fuente externa: X — ${post.postUrl} • Validado por moderación`,
+      reportedByRole: 'Ciudadano',
+      source: 'x',
+      sourceUrl: post.postUrl,
+      locationStatus: 'moderator_confirmed',
+      locationConfidence: 'high',
+      locationSource: finalSource,
+      isDemo: false
+    });
+
+    const safeLabel = sanitizeExternalText(
+      payload.locationLabel || post.locationLabel || confirmedDesc,
+      200
+    );
+    const reason = sanitizeExternalText(
+      payload.reviewReason ||
+        `Aprobado y publicado (${createdIncident.id}) con ubicación aproximada confirmada.`,
+      240
+    );
+
+    await db.execute(
+      `UPDATE social_posts
+       SET status = 'Verificado', suggested_district = ?, latitude = ?, longitude = ?,
+           location_label = ?, location_confidence = 'high', location_status = 'moderator_confirmed',
+           location_source = ?, is_lima_validated = 1, confirmed_location_description = ?,
+           moderator_id = ?, moderator_name = ?, review_reason = ?, reviewed_at = ?, linked_incident_id = ?
+       WHERE id = ?`,
+      [
+        canonicalDistrict,
+        Number(reqLat.toFixed(5)),
+        Number(reqLng.toFixed(5)),
+        safeLabel,
+        finalSource,
+        confirmedDesc,
+        moderator.uid,
+        moderator.name,
+        reason,
+        now,
+        createdIncident.id,
+        postId
+      ]
+    );
+
+    await recordAuditLog(db, {
+      actionType: 'social_post_approved',
+      actorId: moderator.uid,
+      actorName: moderator.name,
+      actorRole: moderator.role,
+      targetType: 'social_post',
+      targetId: postId,
+      details: `Publicación X (${post.externalPostId}) aprobada y publicada como ${createdIncident.id} en ${canonicalDistrict} (locationStatus=moderator_confirmed, coordenadas ofuscadas 200-500m).`
+    });
+
+    return {
+      post: {
+        ...post,
+        status: 'Verificado',
+        state: 'verified',
+        suggestedDistrict: canonicalDistrict,
+        detectedDistrict: canonicalDistrict,
+        district: canonicalDistrict,
+        latitude: Number(reqLat.toFixed(5)),
+        longitude: Number(reqLng.toFixed(5)),
+        locationLabel: safeLabel,
+        locationConfidence: 'high',
+        locationStatus: 'moderator_confirmed',
+        locationSource: finalSource,
+        isLimaValidated: true,
+        confirmedLocationDescription: confirmedDesc,
+        moderatorId: moderator.uid,
+        moderatorName: moderator.name,
+        reviewReason: reason,
+        reviewedAt: now,
+        linkedIncidentId: createdIncident.id
+      },
+      createdIncident
+    };
+  }
+
+  // Legacy 'create_report': requires non-unknown location (or explicit coordinates from moderator)
+  if (post.locationStatus === 'unknown' && (reqLat === undefined || reqLng === undefined)) {
+    throw new Error(
+      'BAD_REQUEST: No hay ubicación suficiente en esta publicación para crear un reporte.'
     );
   }
 
   const districtCenter =
-    DISTRICT_APPROX_CENTERS[confirmedDistrict] || DISTRICT_APPROX_CENTERS['Lima (Cercado)'];
-
+    DISTRICT_APPROX_CENTERS[canonicalDistrict] || DISTRICT_APPROX_CENTERS['Lima'];
   const approxLat =
-    typeof payload.approxLat === 'number' && Number.isFinite(payload.approxLat)
-      ? payload.approxLat
-      : districtCenter.lat;
+    typeof reqLat === 'number' && Number.isFinite(reqLat) ? reqLat : districtCenter.lat;
   const approxLng =
-    typeof payload.approxLng === 'number' && Number.isFinite(payload.approxLng)
-      ? payload.approxLng
-      : districtCenter.lng;
+    typeof reqLng === 'number' && Number.isFinite(reqLng) ? reqLng : districtCenter.lng;
+
+  if (!isWithinLimaMetroBounds(approxLat, approxLng)) {
+    throw new Error(
+      'BAD_REQUEST: Las coordenadas indicadas están fuera de Lima Metropolitana, Perú.'
+    );
+  }
 
   const publishedDate = new Date(post.publishedAt);
   const validDate = !Number.isNaN(publishedDate.getTime()) ? publishedDate : new Date();
@@ -821,20 +1184,26 @@ export async function reviewSocialPost(
   const createdIncident = await createIncident(db, {
     category: payload.category || post.suggestedCategory,
     riskLevel: payload.riskLevel || post.suggestedRiskLevel,
-    title: payload.title || `Alerta ciudadana reportada en ${confirmedDistrict}`,
+    title: payload.title || `Alerta ciudadana reportada en ${canonicalDistrict}`,
     description: payload.description || post.text,
     date: dateStr,
     time: timeStr,
-    district: confirmedDistrict,
+    district: canonicalDistrict,
     approxLocation: {
       lat: approxLat,
       lng: approxLng,
-      address: payload.approxAddress || `Zona aproximada confirmada en ${confirmedDistrict}`
+      address:
+        payload.confirmedLocationDescription ||
+        payload.approxAddress ||
+        `Ubicación aproximada confirmada en ${canonicalDistrict}`
     },
     evidenceNote: `Fuente externa: X — ${post.postUrl}`,
     reportedByRole: 'Ciudadano',
     source: 'x',
     sourceUrl: post.postUrl,
+    locationStatus: 'moderator_confirmed',
+    locationConfidence: post.locationConfidence || 'medium',
+    locationSource: payload.movedManually ? 'moderator_manual' : post.locationSource || 'moderator_manual',
     isDemo: false
   });
 
@@ -845,9 +1214,10 @@ export async function reviewSocialPost(
 
   await db.execute(
     `UPDATE social_posts
-     SET status = 'Verificado', moderator_id = ?, moderator_name = ?, review_reason = ?, reviewed_at = ?, linked_incident_id = ?
+     SET status = 'Verificado', suggested_district = ?, location_status = 'moderator_confirmed',
+         moderator_id = ?, moderator_name = ?, review_reason = ?, reviewed_at = ?, linked_incident_id = ?
      WHERE id = ?`,
-    [moderator.uid, moderator.name, reason, now, createdIncident.id, postId]
+    [canonicalDistrict, moderator.uid, moderator.name, reason, now, createdIncident.id, postId]
   );
 
   await recordAuditLog(db, {
@@ -857,13 +1227,18 @@ export async function reviewSocialPost(
     actorRole: moderator.role,
     targetType: 'social_post',
     targetId: postId,
-    details: `Publicación X (${post.externalPostId}) convertida en reporte ${createdIncident.id} (Pendiente de validación) en ${confirmedDistrict}.`
+    details: `Publicación X (${post.externalPostId}) convertida en reporte ${createdIncident.id} (Pendiente de validación) en ${canonicalDistrict}.`
   });
 
   return {
     post: {
       ...post,
       status: 'Verificado',
+      state: 'verified',
+      suggestedDistrict: canonicalDistrict,
+      detectedDistrict: canonicalDistrict,
+      district: canonicalDistrict,
+      locationStatus: 'moderator_confirmed',
       moderatorId: moderator.uid,
       moderatorName: moderator.name,
       reviewReason: reason,

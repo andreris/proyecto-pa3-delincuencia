@@ -260,7 +260,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              <span class="truncate">${address}</span>
+              <span class="truncate">${/^ubicaci[oó]n aproximada/i.test(address) ? address : `Ubicación aproximada: ${address}`}</span>
             </div>
             <div class="flex items-center justify-between text-slate-400 text-[10px]">
               <span>📅 ${report.date} • ${report.time}</span>
@@ -268,7 +268,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
             </div>
           </div>
           <div class="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <span class="text-[10px] text-slate-400">🛡️ Reporte anónimo seguro</span>
+            <span class="text-[10px] text-slate-400">🛡️ Ubicación aproximada (200-500m)</span>
             <button id="view-incident-btn-${report.id}" class="text-xs font-semibold text-blue-600 hover:text-blue-800 underline">
               Ver detalle
             </button>

@@ -440,11 +440,42 @@ export async function fetchSocialPosts(
   };
 }
 
+export interface GeocodeCandidateResponse {
+  accepted: boolean;
+  latitude?: number;
+  longitude?: number;
+  locationLabel?: string;
+  confidence?: 'high' | 'medium' | 'low';
+  reason?: string;
+}
+
+export async function geocodeCandidateAddress(
+  user: UserProfile | null,
+  query: string,
+  district?: string
+): Promise<GeocodeCandidateResponse> {
+  const res = await authorizedFetch('/api/social/geocode', user, {
+    method: 'POST',
+    body: JSON.stringify({ query, district })
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    result?: GeocodeCandidateResponse;
+    error?: string;
+  };
+  if (!res.ok || !data.result) {
+    throw new ApiClientError(
+      data.error || 'No se pudo geocodificar la referencia en Lima Metropolitana.',
+      res.status
+    );
+  }
+  return data.result;
+}
+
 export async function reviewBackendSocialPost(
   user: UserProfile | null,
   postId: string,
   payload: {
-    action: 'create_report' | 'link_incident' | 'discard';
+    action: 'approve_and_publish' | 'save_for_review' | 'create_report' | 'link_incident' | 'discard';
     reviewReason?: string;
     district?: string;
     category?: IncidentCategory;
@@ -454,6 +485,11 @@ export async function reviewBackendSocialPost(
     approxAddress?: string;
     approxLat?: number;
     approxLng?: number;
+    latitude?: number;
+    longitude?: number;
+    locationLabel?: string;
+    confirmedLocationDescription?: string;
+    movedManually?: boolean;
     linkedIncidentId?: string;
   }
 ): Promise<{
