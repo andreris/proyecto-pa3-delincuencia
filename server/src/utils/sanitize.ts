@@ -5,7 +5,9 @@ import {
 } from '../services/geocoderService.js';
 import {
   IncidentCategory,
+  IncidentFilterKey,
   LocationConfidence,
+  LocationReferenceKey,
   LocationSource,
   LocationStatus,
   RiskLevel
@@ -134,7 +136,138 @@ export const DEFAULT_X_QUERY_DISTRICTS = [
   'Chorrillos'
 ] as const;
 
-export const DEFAULT_X_BASE_KEYWORDS = 'robo OR asalto OR extorsion OR inseguridad';
+export const DEFAULT_X_BASE_KEYWORDS =
+  'robo OR asalto OR extorsion OR balacera OR secuestro OR arrebato OR inseguridad';
+
+export const DEFAULT_X_EXCLUSIONS_AND_FLAGS =
+  '-banco -bancos -tramite -trámite -papeles -documentos -licencia -municipalidad lang:es -is:retweet';
+
+export const INCIDENT_FILTER_DEFINITIONS: Record<
+  IncidentFilterKey,
+  {
+    label: string;
+    queryTerms: string[];
+    matchRegex: RegExp;
+    mappedCategories: IncidentCategory[];
+  }
+> = {
+  robo: {
+    label: 'Robo',
+    queryTerms: ['robo', 'robó', 'robaron', '"víctimas de robo"'],
+    matchRegex: /\b(robo|robaron|roban|victimas de robo)\b/,
+    mappedCategories: ['robo']
+  },
+  asalto: {
+    label: 'Asalto',
+    queryTerms: ['asalto', 'asaltaron', 'asaltantes', '"asalto armado"'],
+    matchRegex: /\b(asalto|asaltaron|asaltantes|asalto armado|mano armada|encanon)\b/,
+    mappedCategories: ['asalto']
+  },
+  balacera: {
+    label: 'Balacera / disparos',
+    queryTerms: ['balacera', 'disparos', 'tiroteo'],
+    matchRegex: /\b(balacera|disparos|disparo|tiroteo|balazo)\b/,
+    mappedCategories: ['asalto']
+  },
+  extorsion: {
+    label: 'Extorsión / cobro de cupos',
+    queryTerms: ['extorsion', 'extorsión', 'extorsionadores', '"cobro de cupos"'],
+    matchRegex: /\b(extorsion|extorsionadores|extorsionan|cobro de cupos|cupo|cupos)\b/,
+    mappedCategories: ['extorsion']
+  },
+  secuestro: {
+    label: 'Secuestro',
+    queryTerms: ['secuestro', 'raptado', 'rapto'],
+    matchRegex: /\b(secuestro|secuestraron|raptado|rapto)\b/,
+    mappedCategories: ['asalto', 'otro']
+  },
+  arrebato: {
+    label: 'Arrebato / robo de celular',
+    queryTerms: ['arrebato', 'cogoteo', '"robo de celular"'],
+    matchRegex: /\b(arrebato|arrebataron|cogoteo|robo de celular|celular)\b/,
+    mappedCategories: ['hurto_menor']
+  },
+  robo_vehiculo: {
+    label: 'Robo a vehículo',
+    queryTerms: ['"robo de vehiculo"', '"robo vehicular"', 'autopartes'],
+    matchRegex: /\b(robo de vehiculo|robo vehicular|robo de auto|autopartes|robaron.*auto|robaron.*camioneta|robaron.*moto)\b/,
+    mappedCategories: ['robo']
+  },
+  actividad_sospechosa: {
+    label: 'Actividad sospechosa',
+    queryTerms: ['sospechoso', 'merodeo', 'inseguridad'],
+    matchRegex: /\b(sospechos|merode|inseguridad|alerta vecinal)\b/,
+    mappedCategories: ['actividad_sospechosa']
+  }
+};
+
+export const ALL_INCIDENT_FILTER_KEYS = Object.keys(
+  INCIDENT_FILTER_DEFINITIONS
+) as IncidentFilterKey[];
+
+export const LOCATION_REFERENCE_DEFINITIONS: Record<
+  LocationReferenceKey,
+  {
+    label: string;
+    queryTerms: string[];
+    matchRegex: RegExp;
+  }
+> = {
+  avenida: {
+    label: 'Avenida / Av',
+    queryTerms: ['avenida', 'av'],
+    matchRegex: /\b(avenida|av\.?)\b/
+  },
+  calle: {
+    label: 'Calle',
+    queryTerms: ['calle'],
+    matchRegex: /\bcalle\b/
+  },
+  jiron: {
+    label: 'Jirón / Jr',
+    queryTerms: ['jiron', 'jr'],
+    matchRegex: /\b(jiron|jr\.?)\b/
+  },
+  cuadra: {
+    label: 'Cuadra',
+    queryTerms: ['cuadra'],
+    matchRegex: /\b(cuadra|cdra\.?)\b/
+  },
+  cruce: {
+    label: 'Cruce / intersección',
+    queryTerms: ['cruce', 'interseccion'],
+    matchRegex: /\b(cruce|interseccion)\b/
+  },
+  esquina: {
+    label: 'Esquina',
+    queryTerms: ['esquina'],
+    matchRegex: /\b(esquina|esq\.?)\b/
+  },
+  paradero: {
+    label: 'Paradero',
+    queryTerms: ['paradero'],
+    matchRegex: /\bparadero\b/
+  },
+  mercado: {
+    label: 'Mercado',
+    queryTerms: ['mercado'],
+    matchRegex: /\bmercado\b/
+  },
+  parque: {
+    label: 'Parque',
+    queryTerms: ['parque'],
+    matchRegex: /\bparque\b/
+  },
+  estacion: {
+    label: 'Estación',
+    queryTerms: ['estacion'],
+    matchRegex: /\bestacion\b/
+  }
+};
+
+export const ALL_LOCATION_REF_KEYS = Object.keys(
+  LOCATION_REFERENCE_DEFINITIONS
+) as LocationReferenceKey[];
 
 /**
  * Normalizes text by decomposing accents/diacritics, converting to lowercase,
@@ -160,6 +293,70 @@ export function hasBalancedParentheses(input: string): boolean {
     }
   }
   return depth === 0;
+}
+
+export function hasBalancedQuotes(input: string): boolean {
+  let count = 0;
+  for (const ch of input) {
+    if (ch === '"') count += 1;
+  }
+  return count % 2 === 0;
+}
+
+export function sanitizeIncidentFilterKeys(keys?: unknown): IncidentFilterKey[] {
+  if (!Array.isArray(keys)) return [];
+  const valid = new Set<string>(ALL_INCIDENT_FILTER_KEYS);
+  const result: IncidentFilterKey[] = [];
+  for (const item of keys) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (trimmed === 'all') return [];
+    if (valid.has(trimmed) && !result.includes(trimmed as IncidentFilterKey)) {
+      result.push(trimmed as IncidentFilterKey);
+    }
+  }
+  return result;
+}
+
+export function sanitizeLocationRefKeys(keys?: unknown): LocationReferenceKey[] {
+  if (!Array.isArray(keys)) return [];
+  const valid = new Set<string>(ALL_LOCATION_REF_KEYS);
+  const result: LocationReferenceKey[] = [];
+  for (const item of keys) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (trimmed === 'any') return [];
+    if (valid.has(trimmed) && !result.includes(trimmed as LocationReferenceKey)) {
+      result.push(trimmed as LocationReferenceKey);
+    }
+  }
+  return result;
+}
+
+/**
+ * Sanitizes optional additional keywords (max 80 chars), stripping unsafe operators/quotes/parens
+ * and never slicing mid-word.
+ */
+export function sanitizeAdditionalKeywords(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  const cleaned = sanitizeExternalText(raw, 120)
+    .replace(/["'()[\]{}<>;|]/g, ' ')
+    .replace(/(^|\s)-(?=\s|$)/g, ' ')
+    .replace(/\b(OR|AND|lang:\S+|is:\S+|-is:\S+)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+  if (cleaned.length <= 80) return cleaned;
+
+  const words = cleaned.split(' ');
+  let acc = '';
+  for (const word of words) {
+    const next = acc ? `${acc} ${word}` : word;
+    if (next.length > 80) break;
+    acc = next;
+  }
+  return acc;
 }
 
 /**
@@ -188,57 +385,190 @@ function formatDistrictForXQuery(district: string): string {
   return /\s/.test(district) ? `"${district}"` : district;
 }
 
-/**
- * Builds a valid X API v2 Recent Search query with balanced parentheses,
- * strict Spanish non-retweet filters, and allowed Lima Metropolitana districts (<512 chars).
- */
-export function buildXRecentSearchQuery(
-  selectedDistricts?: string[],
-  customBaseQuery?: string
-): string {
-  const validDistricts = sanitizeAllowedDistricts(selectedDistricts);
-  const targetDistricts =
-    validDistricts.length > 0 ? validDistricts : [...DEFAULT_X_QUERY_DISTRICTS];
+function buildIncidentClauseCandidates(selectedTypes: IncidentFilterKey[]): string[] {
+  if (
+    selectedTypes.length === 0 ||
+    selectedTypes.length >= ALL_INCIDENT_FILTER_KEYS.length
+  ) {
+    return [`(${DEFAULT_X_BASE_KEYWORDS})`];
+  }
 
-  let baseKeywords = (customBaseQuery || '').trim();
-  if (baseKeywords) {
-    baseKeywords = baseKeywords
-      .replace(/\blang:es\b/gi, '')
-      .replace(/-is:retweet\b/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    if (!hasBalancedParentheses(baseKeywords)) {
-      baseKeywords = baseKeywords.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Tier 1: full controlled keyword list for selected incident types
+  const fullTerms: string[] = [];
+  for (const key of selectedTypes) {
+    for (const term of INCIDENT_FILTER_DEFINITIONS[key].queryTerms) {
+      if (!fullTerms.includes(term)) fullTerms.push(term);
     }
   }
 
-  if (!baseKeywords || baseKeywords.length < 3) {
-    baseKeywords = DEFAULT_X_BASE_KEYWORDS;
+  // Tier 2: up to 2 core terms per type
+  const mediumTerms: string[] = [];
+  for (const key of selectedTypes) {
+    for (const term of INCIDENT_FILTER_DEFINITIONS[key].queryTerms.slice(0, 2)) {
+      if (!mediumTerms.includes(term)) mediumTerms.push(term);
+    }
   }
 
-  let wrappedBase = baseKeywords;
-  const startsWithParen = baseKeywords.startsWith('(') && baseKeywords.endsWith(')');
-  if (!startsWithParen || !hasBalancedParentheses(baseKeywords.slice(1, -1))) {
-    wrappedBase = `(${baseKeywords})`;
+  // Tier 3: 1 primary term per type (always concise, whole words)
+  const primaryTerms: string[] = [];
+  for (const key of selectedTypes) {
+    const primary = INCIDENT_FILTER_DEFINITIONS[key].queryTerms[0];
+    if (!primaryTerms.includes(primary)) primaryTerms.push(primary);
   }
 
-  let districtTerms = targetDistricts.map(formatDistrictForXQuery);
-  let districtClause = `(${districtTerms.join(' OR ')})`;
-  let fullQuery = `${wrappedBase} ${districtClause} lang:es -is:retweet`;
+  return Array.from(
+    new Set([
+      `(${fullTerms.join(' OR ')})`,
+      `(${mediumTerms.join(' OR ')})`,
+      `(${primaryTerms.join(' OR ')})`
+    ])
+  );
+}
 
-  // Keep under X API v2 512-character query cap
-  while (fullQuery.length > 490 && districtTerms.length > 1) {
-    districtTerms = districtTerms.slice(0, -1);
-    districtClause = `(${districtTerms.join(' OR ')})`;
-    fullQuery = `${wrappedBase} ${districtClause} lang:es -is:retweet`;
+function buildLocationRefClauseCandidates(selectedRefs: LocationReferenceKey[]): string[] {
+  if (selectedRefs.length === 0) return [''];
+
+  const fullTerms: string[] = [];
+  const primaryTerms: string[] = [];
+  for (const key of selectedRefs) {
+    const def = LOCATION_REFERENCE_DEFINITIONS[key];
+    for (const term of def.queryTerms) {
+      if (!fullTerms.includes(term)) fullTerms.push(term);
+    }
+    if (!primaryTerms.includes(def.queryTerms[0])) {
+      primaryTerms.push(def.queryTerms[0]);
+    }
   }
 
-  if (!hasBalancedParentheses(fullQuery)) {
-    return `(${DEFAULT_X_BASE_KEYWORDS}) (${DEFAULT_X_QUERY_DISTRICTS.map(formatDistrictForXQuery).join(' OR ')}) lang:es -is:retweet`;
+  return Array.from(
+    new Set([`(${fullTerms.join(' OR ')})`, `(${primaryTerms.join(' OR ')})`])
+  );
+}
+
+function buildAdditionalClause(additionalKeywords: string): string {
+  const clean = sanitizeAdditionalKeywords(additionalKeywords);
+  if (!clean) return '';
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) return words[0];
+  return `(${words.join(' ')})`;
+}
+
+/**
+ * Builds one or more valid X API v2 Recent Search queries strictly <= 512 chars,
+ * with balanced quotes/parentheses, whole tokens (never truncated), exclusions,
+ * and automatic sequential batching when many Lima Metropolitana districts are selected.
+ */
+export function buildXRecentSearchQueries(options?: {
+  selectedDistricts?: string[];
+  incidentTypes?: IncidentFilterKey[];
+  locationReferences?: LocationReferenceKey[];
+  additionalKeywords?: string;
+}): { queries: string[]; preview: string } {
+  const validDistricts = sanitizeAllowedDistricts(options?.selectedDistricts);
+  const targetDistricts =
+    validDistricts.length > 0 ? validDistricts : [...DEFAULT_X_QUERY_DISTRICTS];
+  const incidentTypes = sanitizeIncidentFilterKeys(options?.incidentTypes);
+  const locationRefs = sanitizeLocationRefKeys(options?.locationReferences);
+  const additionalClause = buildAdditionalClause(options?.additionalKeywords || '');
+
+  const incidentCandidates = buildIncidentClauseCandidates(incidentTypes);
+  const locCandidates = buildLocationRefClauseCandidates(locationRefs);
+
+  const longestDistrictLen = Math.max(
+    ...targetDistricts.map(d => formatDistrictForXQuery(d).length)
+  );
+  const maxPrefixAllowed = 505 - DEFAULT_X_EXCLUSIONS_AND_FLAGS.length - longestDistrictLen - 6;
+
+  // Choose the richest incident + location clause combination that leaves room for whole districts
+  let chosenIncident = incidentCandidates[incidentCandidates.length - 1];
+  let chosenLoc = locCandidates[locCandidates.length - 1];
+  let chosenAdditional = additionalClause;
+
+  outer: for (const incClause of incidentCandidates) {
+    for (const locClause of locCandidates) {
+      const parts = [incClause, locClause, additionalClause].filter(Boolean);
+      const prefix = parts.join(' ');
+      if (prefix.length <= maxPrefixAllowed) {
+        chosenIncident = incClause;
+        chosenLoc = locClause;
+        break outer;
+      }
+    }
   }
 
-  return fullQuery;
+  let fixedPrefixParts = [chosenIncident, chosenLoc, chosenAdditional].filter(Boolean);
+  let fixedPrefix = fixedPrefixParts.join(' ');
+
+  // If even compact incident + location + 80-char additional exceeds maxPrefixAllowed,
+  // trim additionalKeywords on whole-word boundary (never cutting mid-word/quote/paren).
+  if (fixedPrefix.length > maxPrefixAllowed && chosenAdditional) {
+    const baseWithoutAdd = [chosenIncident, chosenLoc].filter(Boolean).join(' ');
+    const remainingForAdd = Math.max(0, maxPrefixAllowed - baseWithoutAdd.length - 3);
+    const words = sanitizeAdditionalKeywords(options?.additionalKeywords || '').split(' ').filter(Boolean);
+    let fitted = '';
+    for (const w of words) {
+      const candidate = fitted ? `${fitted} ${w}` : w;
+      if (candidate.length > remainingForAdd) break;
+      fitted = candidate;
+    }
+    chosenAdditional = fitted ? (fitted.includes(' ') ? `(${fitted})` : fitted) : '';
+    fixedPrefixParts = [chosenIncident, chosenLoc, chosenAdditional].filter(Boolean);
+    fixedPrefix = fixedPrefixParts.join(' ');
+  }
+
+  // Greedily pack whole formatted districts into sequential query groups <= 505 chars
+  const formattedDistricts = targetDistricts.map(formatDistrictForXQuery);
+  const queries: string[] = [];
+  let currentGroup: string[] = [];
+
+  const assembleQuery = (districtGroup: string[]) =>
+    `${fixedPrefix} (${districtGroup.join(' OR ')}) ${DEFAULT_X_EXCLUSIONS_AND_FLAGS}`;
+
+  for (const distToken of formattedDistricts) {
+    const candidateGroup = [...currentGroup, distToken];
+    const candidateQuery = assembleQuery(candidateGroup);
+
+    if (candidateQuery.length <= 505 || currentGroup.length === 0) {
+      currentGroup = candidateGroup;
+    } else {
+      queries.push(assembleQuery(currentGroup));
+      currentGroup = [distToken];
+    }
+  }
+
+  if (currentGroup.length > 0) {
+    queries.push(assembleQuery(currentGroup));
+  }
+
+  const safeQueries = queries.filter(
+    q => q.length <= 512 && hasBalancedParentheses(q) && hasBalancedQuotes(q)
+  );
+
+  if (safeQueries.length === 0) {
+    const fallback = `(${DEFAULT_X_BASE_KEYWORDS}) (${DEFAULT_X_QUERY_DISTRICTS.map(formatDistrictForXQuery).join(' OR ')}) ${DEFAULT_X_EXCLUSIONS_AND_FLAGS}`;
+    return { queries: [fallback], preview: fallback };
+  }
+
+  const preview =
+    safeQueries.length === 1
+      ? safeQueries[0]
+      : safeQueries.map((q, idx) => `[Grupo ${idx + 1}/${safeQueries.length}] ${q}`).join('\n');
+
+  return { queries: safeQueries, preview };
+}
+
+/**
+ * Compatibility single-query wrapper used by existing callers/tests.
+ */
+export function buildXRecentSearchQuery(
+  selectedDistricts?: string[],
+  customKeywords?: string
+): string {
+  return buildXRecentSearchQueries({
+    selectedDistricts,
+    additionalKeywords: customKeywords
+  }).queries[0];
 }
 
 // Specific multi-word districts MUST come before bare "Lima"
@@ -331,12 +661,45 @@ export function extractLocationCandidate(text: string): string | undefined {
   return candidate.length >= 5 ? candidate : undefined;
 }
 
+/**
+ * Detects when "comas" in Spanish refers to punctuation marks rather than Comas district in Lima.
+ */
+export function isComasPunctuationContext(rawText: string): boolean {
+  const normalized = normalizeForMatching(rawText);
+  if (!/\bcomas\b/.test(normalized)) return false;
+
+  const hasPunctuationPhrase =
+    /\b(sin comas|con comas|usar comas|entre comas|puntos y comas|punto y coma|faltan comas|poner comas|ponle comas|comas y puntos|comas y tildes|comas ni|signos de puntuacion|ortografia|puntuacion|redaccion|gramatica)\b/.test(
+      normalized
+    );
+
+  if (hasPunctuationPhrase) {
+    // Only allow if there is an unmistakable Lima geographical phrase alongside
+    const explicitDistrictPhrase =
+      /\b(distrito de comas|municipalidad de comas|av\.?\s+[a-z]+\s+en comas|en comas,\s*lima)\b/.test(
+        normalized
+      );
+    return !explicitDistrictPhrase;
+  }
+
+  // If "comas" appears strictly lowercase and without any geographical cue or Lima context
+  const hasCapitalizedComas = /\bComas\b|\bCOMAS\b/.test(rawText);
+  const hasGeoCueForComas =
+    /\b(en|de|distrito de|desde|hacia|por)\s+comas\b/.test(normalized) ||
+    /\bcomas\b[,\s-]+\blima\b/.test(normalized);
+
+  return !hasCapitalizedComas && !hasGeoCueForComas;
+}
+
 export function detectAllowedDistrict(text: string): string | undefined {
   const normalized = normalizeForMatching(text);
   if (!normalized) return undefined;
 
   for (const entry of ALLOWED_DISTRICT_PATTERNS) {
     if (entry.regex.test(normalized)) {
+      if (entry.district === 'Comas' && isComasPunctuationContext(text)) {
+        continue;
+      }
       return entry.district;
     }
   }
@@ -467,14 +830,51 @@ export interface XPostGeolocationOutcome {
   discardReason?: string;
 }
 
+const ADMIN_BANKING_FALSE_POSITIVE_REGEX =
+  /\b(banco|bancos|bancaria|bancario|tramite|tramites|papeles|documentos|licencia|licencias|municipalidad|phishing|clave token|banca por internet)\b/;
+
+export function isAdministrativeOrBankingPost(text: string): boolean {
+  const normalized = normalizeForMatching(text);
+  if (!normalized) return false;
+  return ADMIN_BANKING_FALSE_POSITIVE_REGEX.test(normalized);
+}
+
+export function matchesLocationReferences(
+  text: string,
+  selectedRefs: LocationReferenceKey[]
+): boolean {
+  if (!selectedRefs || selectedRefs.length === 0) return true;
+  const normalized = normalizeForMatching(text);
+  if (!normalized) return false;
+  return selectedRefs.some(refKey => {
+    const def = LOCATION_REFERENCE_DEFINITIONS[refKey];
+    return def ? def.matchRegex.test(normalized) : false;
+  });
+}
+
+export function matchesIncidentFilterKeys(
+  text: string,
+  selectedTypes: IncidentFilterKey[],
+  suggestedCategory: IncidentCategory
+): boolean {
+  if (!selectedTypes || selectedTypes.length === 0) return true;
+  const normalized = normalizeForMatching(text);
+  return selectedTypes.some(key => {
+    const def = INCIDENT_FILTER_DEFINITIONS[key];
+    if (!def) return false;
+    return def.matchRegex.test(normalized) || def.mappedCategories.includes(suggestedCategory);
+  });
+}
+
 /**
  * Mandatory server-side validation and safe geolocation pipeline for X posts:
  * 1. Rejects retweets.
- * 2. Rejects any foreign country/city (including X place countryCode !== PE).
- * 3. Rejects Callao and Callao districts (closed list = Lima Metropolitana only).
- * 4. Requires explicit evidence of Perú / Lima Metropolitana.
- * 5. Extracts address/place candidate and geocodes via GeocoderService (or treats X coords as candidate).
- * 6. Never invents exact coordinates from a bare district.
+ * 2. Rejects administrative/banking false positives (banco, trámite, documentos, licencia, municipalidad).
+ * 3. Rejects any foreign country/city (including X place countryCode !== PE).
+ * 4. Rejects Callao and Callao districts (closed list = Lima Metropolitana only).
+ * 5. Requires explicit evidence of Perú / Lima Metropolitana & optional location reference match.
+ * 6. Extracts address/place candidate and geocodes via GeocoderService (or treats X coords as candidate).
+ * 7. Never invents exact coordinates from a bare district.
  */
 export async function validateAndGeolocateXPost(options: {
   text: string;
@@ -482,6 +882,8 @@ export async function validateAndGeolocateXPost(options: {
   referencedTweets?: Array<{ type: string }>;
   xGeo?: XGeoInput;
   selectedDistricts?: string[];
+  selectedIncidentTypes?: IncidentFilterKey[];
+  selectedLocationRefs?: LocationReferenceKey[];
   dateFrom?: string;
   dateTo?: string;
   geocoder?: GeocoderService;
@@ -509,6 +911,14 @@ export async function validateAndGeolocateXPost(options: {
   if (isRetweetPost(options.text, options.referencedTweets)) {
     return rejectUnknown(
       'Retuit descartado automáticamente (solo se admiten publicaciones originales).',
+      meta.suggestedDistrict || 'Sin distrito'
+    );
+  }
+
+  // 1b. Administrative / banking false-positive exclusion check
+  if (isAdministrativeOrBankingPost(safeText)) {
+    return rejectUnknown(
+      'Falso positivo administrativo o bancario descartado automáticamente (banco, trámite, documentos, licencia o municipalidad).',
       meta.suggestedDistrict || 'Sin distrito'
     );
   }
@@ -640,6 +1050,15 @@ export async function validateAndGeolocateXPost(options: {
   if (!hasLimaPeruEvidence) {
     return rejectUnknown(
       `Distrito ambiguo o país no confirmado: "${detectedDistrict}" no cuenta con evidencia de Lima Metropolitana, Perú.`,
+      detectedDistrict
+    );
+  }
+
+  // 8b. Location reference filter enforcement (when active, reject posts lacking selected street/place cue)
+  const selectedRefs = sanitizeLocationRefKeys(options.selectedLocationRefs);
+  if (selectedRefs.length > 0 && !matchesLocationReferences(safeText, selectedRefs)) {
+    return rejectUnknown(
+      'Sin referencia de ubicación solicitada: la publicación no incluye avenida, calle, jirón, cuadra, cruce, esquina, paradero, mercado, parque o estación según el filtro activo.',
       detectedDistrict
     );
   }

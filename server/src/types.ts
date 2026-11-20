@@ -91,11 +91,37 @@ export interface SocialPostRecord {
   linkedIncidentId?: string;
 }
 
+export type IncidentFilterKey =
+  | 'robo'
+  | 'asalto'
+  | 'balacera'
+  | 'extorsion'
+  | 'secuestro'
+  | 'arrebato'
+  | 'robo_vehiculo'
+  | 'actividad_sospechosa';
+
+export type LocationReferenceKey =
+  | 'avenida'
+  | 'calle'
+  | 'jiron'
+  | 'cuadra'
+  | 'cruce'
+  | 'esquina'
+  | 'paradero'
+  | 'mercado'
+  | 'parque'
+  | 'estacion';
+
 export interface SocialSourceConfig {
   id: string;
   searchQuery: string;
+  queryGroups: string[];
   retentionDays: number;
   filterDistricts: string[];
+  filterIncidentTypes: IncidentFilterKey[];
+  filterLocationRefs: LocationReferenceKey[];
+  additionalKeywords: string;
   filterDateFrom?: string;
   filterDateTo?: string;
   lastSyncAt?: string;

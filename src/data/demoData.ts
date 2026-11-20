@@ -1,4 +1,11 @@
-import { IncidentReport, PreventiveRoute, SocialPost, TrustedContact } from '../types';
+import {
+  IncidentFilterKey,
+  IncidentReport,
+  LocationReferenceKey,
+  PreventiveRoute,
+  SocialPost,
+  TrustedContact
+} from '../types';
 
 export const DEMO_INCIDENTS: IncidentReport[] = [
   {
@@ -410,6 +417,154 @@ export const ALLOWED_SOCIAL_DISTRICTS = [
   'Villa El Salvador',
   'Villa María del Triunfo'
 ] as const;
+
+export const INCIDENT_FILTER_OPTIONS: Array<{
+  key: IncidentFilterKey;
+  label: string;
+  terms: string[];
+  matchRegex: RegExp;
+}> = [
+  {
+    key: 'robo',
+    label: 'Robo',
+    terms: ['robo', 'robó', 'robaron', '"víctimas de robo"'],
+    matchRegex: /\b(robo|robaron|roban|victimas de robo)\b/i
+  },
+  {
+    key: 'asalto',
+    label: 'Asalto',
+    terms: ['asalto', 'asaltaron', 'asaltantes', '"asalto armado"'],
+    matchRegex: /\b(asalto|asaltaron|asaltantes|asalto armado|mano armada)\b/i
+  },
+  {
+    key: 'balacera',
+    label: 'Balacera / disparos',
+    terms: ['balacera', 'disparos', 'tiroteo'],
+    matchRegex: /\b(balacera|disparos|disparo|tiroteo|balazo)\b/i
+  },
+  {
+    key: 'extorsion',
+    label: 'Extorsión / cobro de cupos',
+    terms: ['extorsion', 'extorsión', 'extorsionadores', '"cobro de cupos"'],
+    matchRegex: /\b(extorsion|extorsión|extorsionadores|extorsionan|cobro de cupos|cupos)\b/i
+  },
+  {
+    key: 'secuestro',
+    label: 'Secuestro',
+    terms: ['secuestro', 'raptado', 'rapto'],
+    matchRegex: /\b(secuestro|secuestraron|raptado|rapto)\b/i
+  },
+  {
+    key: 'arrebato',
+    label: 'Arrebato / robo de celular',
+    terms: ['arrebato', 'cogoteo', '"robo de celular"'],
+    matchRegex: /\b(arrebato|arrebataron|cogoteo|robo de celular|celular)\b/i
+  },
+  {
+    key: 'robo_vehiculo',
+    label: 'Robo a vehículo',
+    terms: ['"robo de vehiculo"', '"robo vehicular"', 'autopartes'],
+    matchRegex: /\b(robo de vehiculo|robo vehicular|robo de auto|autopartes)\b/i
+  },
+  {
+    key: 'actividad_sospechosa',
+    label: 'Actividad sospechosa',
+    terms: ['sospechoso', 'merodeo', 'inseguridad'],
+    matchRegex: /\b(sospechos|merode|inseguridad|alerta)\b/i
+  }
+];
+
+export const LOCATION_REF_OPTIONS: Array<{
+  key: LocationReferenceKey;
+  label: string;
+  terms: string[];
+  matchRegex: RegExp;
+}> = [
+  { key: 'avenida', label: 'Avenida / Av', terms: ['avenida', 'av'], matchRegex: /\b(avenida|av\.?)\b/i },
+  { key: 'calle', label: 'Calle', terms: ['calle'], matchRegex: /\bcalle\b/i },
+  { key: 'jiron', label: 'Jirón / Jr', terms: ['jiron', 'jr'], matchRegex: /\b(jiron|jir[oó]n|jr\.?)\b/i },
+  { key: 'cuadra', label: 'Cuadra', terms: ['cuadra'], matchRegex: /\b(cuadra|cdra\.?)\b/i },
+  { key: 'cruce', label: 'Cruce / intersección', terms: ['cruce', 'interseccion'], matchRegex: /\b(cruce|intersecci[oó]n)\b/i },
+  { key: 'esquina', label: 'Esquina', terms: ['esquina'], matchRegex: /\b(esquina|esq\.?)\b/i },
+  { key: 'paradero', label: 'Paradero', terms: ['paradero'], matchRegex: /\bparadero\b/i },
+  { key: 'mercado', label: 'Mercado', terms: ['mercado'], matchRegex: /\bmercado\b/i },
+  { key: 'parque', label: 'Parque', terms: ['parque'], matchRegex: /\bparque\b/i },
+  { key: 'estacion', label: 'Estación', terms: ['estacion'], matchRegex: /\bestaci[oó]n\b/i }
+];
+
+const DEMO_DEFAULT_DISTRICTS = [
+  'Lima',
+  'Comas',
+  'Los Olivos',
+  'San Juan de Lurigancho',
+  'San Martín de Porres',
+  'Santiago de Surco',
+  'Villa El Salvador',
+  'Miraflores',
+  'Ate',
+  'Chorrillos'
+];
+
+const DEMO_EXCLUSIONS_AND_FLAGS =
+  '-banco -bancos -tramite -trámite -papeles -documentos -licencia -municipalidad lang:es -is:retweet';
+
+export function buildLocalQueryPreview(options: {
+  incidentTypes: IncidentFilterKey[];
+  locationRefs: LocationReferenceKey[];
+  additionalKeywords: string;
+  districts: string[];
+}): { queries: string[]; preview: string } {
+  const realDistricts = options.districts.filter(d => d !== 'Sin distrito');
+  const targetDistricts = realDistricts.length > 0 ? realDistricts : DEMO_DEFAULT_DISTRICTS;
+
+  const incClause =
+    options.incidentTypes.length === 0 ||
+    options.incidentTypes.length >= INCIDENT_FILTER_OPTIONS.length
+      ? '(robo OR asalto OR extorsion OR balacera OR secuestro OR arrebato OR inseguridad)'
+      : `(${INCIDENT_FILTER_OPTIONS.filter(o => options.incidentTypes.includes(o.key))
+          .flatMap(o => (options.incidentTypes.length > 3 ? [o.terms[0]] : o.terms.slice(0, 2)))
+          .join(' OR ')})`;
+
+  const locClause =
+    options.locationRefs.length === 0
+      ? ''
+      : `(${LOCATION_REF_OPTIONS.filter(o => options.locationRefs.includes(o.key))
+          .flatMap(o => (options.locationRefs.length > 4 ? [o.terms[0]] : o.terms))
+          .join(' OR ')})`;
+
+  const cleanAdd = options.additionalKeywords
+    .replace(/["'()[\]{}<>;|]/g, ' ')
+    .replace(/\b(OR|AND)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  const addClause = cleanAdd ? (cleanAdd.includes(' ') ? `(${cleanAdd})` : cleanAdd) : '';
+
+  const prefix = [incClause, locClause, addClause].filter(Boolean).join(' ');
+  const formatted = targetDistricts.map(d => (/\s/.test(d) ? `"${d}"` : d));
+  const queries: string[] = [];
+  let group: string[] = [];
+  const assemble = (g: string[]) => `${prefix} (${g.join(' OR ')}) ${DEMO_EXCLUSIONS_AND_FLAGS}`;
+
+  for (const token of formatted) {
+    const cand = [...group, token];
+    if (assemble(cand).length <= 505 || group.length === 0) {
+      group = cand;
+    } else {
+      queries.push(assemble(group));
+      group = [token];
+    }
+  }
+  if (group.length > 0) queries.push(assemble(group));
+
+  return {
+    queries,
+    preview:
+      queries.length <= 1
+        ? queries[0] || ''
+        : queries.map((q, i) => `[Grupo ${i + 1}/${queries.length}] ${q}`).join('\n')
+  };
+}
 
 export const PERU_DISTRICTS = [
   'Todos los distritos',

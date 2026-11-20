@@ -1,9 +1,17 @@
 import { DatabaseAdapter } from '../db/types.js';
-import { AuthenticatedUser, SocialPostRecord } from '../types.js';
 import {
-  buildXRecentSearchQuery,
+  AuthenticatedUser,
+  IncidentFilterKey,
+  LocationReferenceKey,
+  SocialPostRecord
+} from '../types.js';
+import {
+  buildXRecentSearchQueries,
+  sanitizeAdditionalKeywords,
   sanitizeAllowedDistricts,
   sanitizeExternalText,
+  sanitizeIncidentFilterKeys,
+  sanitizeLocationRefKeys,
   sanitizeXPostUrl,
   validateAndGeolocateXPost,
   XGeoInput
@@ -73,6 +81,9 @@ export type FetchLike = (
 
 export interface SyncFiltersInput {
   districts?: string[];
+  incidentTypes?: IncidentFilterKey[];
+  locationReferences?: LocationReferenceKey[];
+  additionalKeywords?: string;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -84,6 +95,7 @@ export interface SyncResult {
   duplicatesSkipped: number;
   discardReasons: string[];
   queryUsed: string;
+  queryGroups: string[];
   maxPostsLimit: number;
   cooldownMinutes: number;
   nextAllowedSyncAt: string;
@@ -285,6 +297,21 @@ export class XService {
         ? sanitizeAllowedDistricts(filtersInput.districts)
         : config.filterDistricts;
 
+    const effectiveIncidentTypes =
+      filtersInput?.incidentTypes !== undefined
+        ? sanitizeIncidentFilterKeys(filtersInput.incidentTypes)
+        : config.filterIncidentTypes;
+
+    const effectiveLocationRefs =
+      filtersInput?.locationReferences !== undefined
+        ? sanitizeLocationRefKeys(filtersInput.locationReferences)
+        : config.filterLocationRefs;
+
+    const effectiveAdditionalKeywords =
+      filtersInput?.additionalKeywords !== undefined
+        ? sanitizeAdditionalKeywords(filtersInput.additionalKeywords)
+        : config.additionalKeywords;
+
     const rawFrom =
       filtersInput?.dateFrom !== undefined ? filtersInput.dateFrom : config.filterDateFrom;
     const rawTo =
@@ -324,95 +351,121 @@ export class XService {
     }
 
     this.isSyncing = true;
-    const query = buildXRecentSearchQuery(effectiveDistricts, config.searchQuery);
+    const { queries, preview } = buildXRecentSearchQueries({
+      selectedDistricts: effectiveDistricts,
+      incidentTypes: effectiveIncidentTypes,
+      locationReferences: effectiveLocationRefs,
+      additionalKeywords: effectiveAdditionalKeywords
+    });
 
     try {
-      // Single request only — no pagination, no next_token loop, max_results=10
-      const params = new URLSearchParams({
-        query,
-        max_results: String(HARD_MAX_POSTS_PER_SYNC),
-        // Privacy-minimal fields: public post text, timestamp, retweet ref, and optional public geo place/coords (treated strictly as candidate)
-        'tweet.fields': 'created_at,lang,referenced_tweets,geo',
-        expansions: 'geo.place_id',
-        'place.fields': 'country,country_code,full_name,name,geo'
-      });
-
-      if (startTimeIso) {
-        params.set('start_time', startTimeIso);
-      }
-      if (endTimeIso) {
-        params.set('end_time', endTimeIso);
-      }
-
-      const endpoint = `${this.apiBaseUrl}/tweets/search/recent?${params.toString()}`;
-      const response = await this.fetchImpl(endpoint, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json'
-        }
-      });
-
+      const collectedTweets = new Map<string, { tweet: XApiTweet; queryUsed: string }>();
+      const placesMap = new Map<string, XApiPlace>();
       let rateLimitRemaining: number | undefined;
       let rateLimitReset: string | undefined;
-      const remHeader = response.headers.get('x-rate-limit-remaining');
-      const resetHeader = response.headers.get('x-rate-limit-reset');
-      if (remHeader !== null && !Number.isNaN(Number(remHeader))) {
-        rateLimitRemaining = Number(remHeader);
-      }
-      if (resetHeader && !Number.isNaN(Number(resetHeader))) {
-        rateLimitReset = new Date(Number(resetHeader) * 1000).toISOString();
-      }
 
-      if (response.status === 402) {
-        throw new XCreditsError();
-      }
+      // Execute each sequential district-group query (single page per group, no next_token, global cap <= 10)
+      for (const query of queries) {
+        if (collectedTweets.size >= maxPostsLimit) {
+          break;
+        }
 
-      if (response.status === 429) {
-        throw new XRateLimitError(
-          'Límite de consultas de X API alcanzado. Espera antes de volver a sincronizar.',
-          rateLimitReset
-        );
-      }
+        const params = new URLSearchParams({
+          query,
+          max_results: String(HARD_MAX_POSTS_PER_SYNC),
+          // Privacy-minimal fields: public post text, timestamp, retweet ref, and optional public geo place/coords (treated strictly as candidate)
+          'tweet.fields': 'created_at,lang,referenced_tweets,geo',
+          expansions: 'geo.place_id',
+          'place.fields': 'country,country_code,full_name,name,geo'
+        });
 
-      if (response.status === 401 || response.status === 403) {
-        throw new Error(
-          'Credenciales de X API rechazadas o sin permisos suficientes para búsqueda reciente.'
-        );
-      }
+        if (startTimeIso) {
+          params.set('start_time', startTimeIso);
+        }
+        if (endTimeIso) {
+          params.set('end_time', endTimeIso);
+        }
 
-      const payload = (await response.json()) as XApiRecentSearchResponse;
+        const endpoint = `${this.apiBaseUrl}/tweets/search/recent?${params.toString()}`;
+        const response = await this.fetchImpl(endpoint, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json'
+          }
+        });
 
-      if (!response.ok) {
-        const detail = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.message || `HTTP ${response.status}`;
-        if (/credit|billing|quota|tier/i.test(detail)) {
-          throw new XCreditsError(
-            'Créditos o cuota de X API agotados. Puedes seguir operando con Modo demo.'
+        const remHeader = response.headers.get('x-rate-limit-remaining');
+        const resetHeader = response.headers.get('x-rate-limit-reset');
+        if (remHeader !== null && !Number.isNaN(Number(remHeader))) {
+          rateLimitRemaining = Number(remHeader);
+        }
+        if (resetHeader && !Number.isNaN(Number(resetHeader))) {
+          rateLimitReset = new Date(Number(resetHeader) * 1000).toISOString();
+        }
+
+        if (response.status === 402) {
+          throw new XCreditsError();
+        }
+
+        if (response.status === 429) {
+          throw new XRateLimitError(
+            'Límite de consultas de X API alcanzado. Espera antes de volver a sincronizar.',
+            rateLimitReset
           );
         }
-        if (response.status === 400 && /start_time|end_time|7 days|date|time/i.test(detail)) {
-          throw new XDateRangeError(
-            `X API v2 no acepta el rango de fechas solicitado (la búsqueda reciente suele limitarse a los últimos 7 días): ${detail}`
+
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(
+            'Credenciales de X API rechazadas o sin permisos suficientes para búsqueda reciente.'
           );
         }
-        throw new Error(`Error al consultar X API v2: ${detail}`);
-      }
 
-      const rawTweets = Array.isArray(payload.data) ? payload.data : [];
-      const placesMap = new Map<string, XApiPlace>();
-      for (const place of payload.includes?.places || []) {
-        if (place && place.id) {
-          placesMap.set(place.id, place);
+        const payload = (await response.json()) as XApiRecentSearchResponse;
+
+        if (!response.ok) {
+          const detail =
+            payload?.errors?.[0]?.detail ||
+            payload?.errors?.[0]?.message ||
+            `HTTP ${response.status}`;
+          if (/credit|billing|quota|tier/i.test(detail)) {
+            throw new XCreditsError(
+              'Créditos o cuota de X API agotados. Puedes seguir operando con Modo demo.'
+            );
+          }
+          if (response.status === 400 && /start_time|end_time|7 days|date|time/i.test(detail)) {
+            throw new XDateRangeError(
+              `X API v2 no acepta el rango de fechas solicitado (la búsqueda reciente suele limitarse a los últimos 7 días): ${detail}`
+            );
+          }
+          throw new Error(`Error al consultar X API v2: ${detail}`);
+        }
+
+        for (const place of payload.includes?.places || []) {
+          if (place && place.id) {
+            placesMap.set(place.id, place);
+          }
+        }
+
+        const rawTweets = Array.isArray(payload.data) ? payload.data : [];
+        for (const tweet of rawTweets) {
+          if (!tweet || typeof tweet.id !== 'string' || typeof tweet.text !== 'string') {
+            continue;
+          }
+          if (!collectedTweets.has(tweet.id)) {
+            collectedTweets.set(tweet.id, { tweet, queryUsed: query });
+          }
+          if (collectedTweets.size >= maxPostsLimit) {
+            break;
+          }
         }
       }
 
       // Enforce strict server-side cap regardless of upstream/mock payload size
-      const cappedTweets = rawTweets
-        .filter(t => t && typeof t.id === 'string' && typeof t.text === 'string')
-        .slice(0, maxPostsLimit);
+      const cappedEntries = Array.from(collectedTweets.values()).slice(0, maxPostsLimit);
 
       const evaluatedPosts: EvaluatedSocialPostInput[] = await Promise.all(
-        cappedTweets.map(async tweet => {
+        cappedEntries.map(async ({ tweet, queryUsed }) => {
           const safeText = sanitizeExternalText(tweet.text, 500);
           const publishedAt = tweet.created_at || new Date().toISOString();
 
@@ -452,6 +505,8 @@ export class XService {
             referencedTweets: tweet.referenced_tweets,
             xGeo,
             selectedDistricts: effectiveDistricts,
+            selectedIncidentTypes: effectiveIncidentTypes,
+            selectedLocationRefs: effectiveLocationRefs,
             dateFrom,
             dateTo,
             geocoder: this.geocoder
@@ -463,7 +518,7 @@ export class XService {
             postUrl: sanitizeXPostUrl(`https://x.com/i/web/status/${tweet.id}`, tweet.id),
             text: safeText,
             publishedAt,
-            queryUsed: query,
+            queryUsed,
             suggestedCategory: outcome.suggestedCategory,
             suggestedRiskLevel: outcome.suggestedRiskLevel,
             suggestedDistrict: outcome.detectedDistrict,
@@ -497,7 +552,7 @@ export class XService {
       const nextAllowedSyncAt = new Date(
         new Date(syncTimestamp).getTime() + cooldownState.cooldownMinutes * 60 * 1000
       ).toISOString();
-      const message = `Sincronización completada: ${cappedTweets.length} consultadas, ${imported.length} importadas en revisión (máx. ${maxPostsLimit}), ${discarded.length} descartadas automáticamente, ${duplicatesSkipped} duplicadas omitidas.`;
+      const message = `Sincronización completada: ${cappedEntries.length} consultadas, ${imported.length} importadas en revisión (máx. ${maxPostsLimit}), ${discarded.length} descartadas automáticamente, ${duplicatesSkipped} duplicadas omitidas.`;
 
       await updateSyncMetadata(db, {
         lastSyncAt: syncTimestamp,
@@ -513,16 +568,17 @@ export class XService {
         actorRole: moderator.role,
         targetType: 'social_config',
         targetId: 'x-default',
-        details: `${message}${discardReasons.length > 0 ? ` Motivos de descarte: ${discardReasons.join(' | ')}.` : ''} Consulta: "${query}".`
+        details: `${message}${discardReasons.length > 0 ? ` Motivos de descarte: ${discardReasons.join(' | ')}.` : ''} Consulta (${queries.length} grupo${queries.length === 1 ? '' : 's'}): "${preview}".`
       });
 
       return {
-        fetchedCount: cappedTweets.length,
+        fetchedCount: cappedEntries.length,
         importedCount: imported.length,
         discardedCount: discarded.length,
         duplicatesSkipped,
         discardReasons,
-        queryUsed: query,
+        queryUsed: preview,
+        queryGroups: queries,
         maxPostsLimit,
         cooldownMinutes: cooldownState.cooldownMinutes,
         nextAllowedSyncAt,

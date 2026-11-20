@@ -59,6 +59,9 @@ export const SCHEMA_STATEMENTS = [
     search_query TEXT NOT NULL,
     retention_days INTEGER NOT NULL DEFAULT 30,
     filter_districts TEXT NOT NULL DEFAULT '[]',
+    filter_incident_types TEXT NOT NULL DEFAULT '[]',
+    filter_location_refs TEXT NOT NULL DEFAULT '[]',
+    additional_keywords TEXT NOT NULL DEFAULT '',
     filter_date_from TEXT,
     filter_date_to TEXT,
     last_sync_at TEXT,
@@ -89,6 +92,9 @@ export const SCHEMA_STATEMENTS = [
 
 export const CONFIG_COLUMN_MIGRATIONS = [
   `ALTER TABLE social_configs ADD COLUMN filter_districts TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE social_configs ADD COLUMN filter_incident_types TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE social_configs ADD COLUMN filter_location_refs TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE social_configs ADD COLUMN additional_keywords TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE social_configs ADD COLUMN filter_date_from TEXT`,
   `ALTER TABLE social_configs ADD COLUMN filter_date_to TEXT`
 ];

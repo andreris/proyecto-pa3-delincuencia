@@ -3,8 +3,10 @@ import { DatabaseAdapter } from '../db/types.js';
 import {
   AuthenticatedUser,
   IncidentCategory,
+  IncidentFilterKey,
   IncidentReportRecord,
   LocationConfidence,
+  LocationReferenceKey,
   LocationSource,
   LocationStatus,
   ReportStatus,
@@ -16,18 +18,23 @@ import {
 } from '../types.js';
 import {
   ALLOWED_SOCIAL_DISTRICT_SET,
-  buildXRecentSearchQuery,
+  buildXRecentSearchQueries,
   DISTRICT_APPROX_CENTERS,
+  matchesIncidentFilterKeys,
+  matchesLocationReferences,
   obfuscateCoordinatesForPublicMap,
+  sanitizeAdditionalKeywords,
   sanitizeAllowedDistricts,
   sanitizeExternalText,
+  sanitizeIncidentFilterKeys,
+  sanitizeLocationRefKeys,
   sanitizePublicLocationLabel,
   sanitizeXPostUrl
 } from '../utils/sanitize.js';
 import { isWithinLimaMetroBounds } from './geocoderService.js';
 import { recordAuditLog } from './auditService.js';
 
-export const DEFAULT_X_QUERY = buildXRecentSearchQuery();
+export const DEFAULT_X_QUERY = buildXRecentSearchQueries().preview;
 
 interface IncidentRow {
   id: string;
@@ -88,6 +95,9 @@ interface SocialConfigRow {
   search_query: string;
   retention_days: number;
   filter_districts: string | null;
+  filter_incident_types: string | null;
+  filter_location_refs: string | null;
+  additional_keywords: string | null;
   filter_date_from: string | null;
   filter_date_to: string | null;
   last_sync_at: string | null;
@@ -103,6 +113,26 @@ function parseFilterDistricts(raw: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(raw);
     return sanitizeAllowedDistricts(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return [];
+  }
+}
+
+function parseFilterIncidentTypes(raw: string | null | undefined): IncidentFilterKey[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return sanitizeIncidentFilterKeys(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function parseFilterLocationRefs(raw: string | null | undefined): LocationReferenceKey[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return sanitizeLocationRefKeys(parsed);
   } catch {
     return [];
   }
@@ -225,11 +255,26 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
   );
 
   if (existing) {
+    const filterDistricts = parseFilterDistricts(existing.filter_districts);
+    const filterIncidentTypes = parseFilterIncidentTypes(existing.filter_incident_types);
+    const filterLocationRefs = parseFilterLocationRefs(existing.filter_location_refs);
+    const additionalKeywords = sanitizeAdditionalKeywords(existing.additional_keywords || '');
+    const built = buildXRecentSearchQueries({
+      selectedDistricts: filterDistricts,
+      incidentTypes: filterIncidentTypes,
+      locationReferences: filterLocationRefs,
+      additionalKeywords
+    });
+
     return {
       id: existing.id,
-      searchQuery: existing.search_query,
+      searchQuery: built.preview,
+      queryGroups: built.queries,
       retentionDays: Number(existing.retention_days),
-      filterDistricts: parseFilterDistricts(existing.filter_districts),
+      filterDistricts,
+      filterIncidentTypes,
+      filterLocationRefs,
+      additionalKeywords,
       filterDateFrom: existing.filter_date_from ?? undefined,
       filterDateTo: existing.filter_date_to ?? undefined,
       lastSyncAt: existing.last_sync_at ?? undefined,
@@ -242,17 +287,25 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
   }
 
   const now = new Date().toISOString();
+  const defaultBuilt = buildXRecentSearchQueries();
   await db.execute(
-    `INSERT INTO social_configs (id, search_query, retention_days, filter_districts, filter_date_from, filter_date_to, last_sync_status, last_imported_count, updated_at)
-     VALUES (?, ?, ?, '[]', NULL, NULL, ?, ?, ?)`,
-    ['x-default', DEFAULT_X_QUERY, Number(process.env.SOCIAL_RETENTION_DAYS || 30), 'idle', 0, now]
+    `INSERT INTO social_configs (
+       id, search_query, retention_days, filter_districts, filter_incident_types,
+       filter_location_refs, additional_keywords, filter_date_from, filter_date_to,
+       last_sync_status, last_imported_count, updated_at
+     ) VALUES (?, ?, ?, '[]', '[]', '[]', '', NULL, NULL, ?, ?, ?)`,
+    ['x-default', defaultBuilt.preview, Number(process.env.SOCIAL_RETENTION_DAYS || 30), 'idle', 0, now]
   );
 
   return {
     id: 'x-default',
-    searchQuery: DEFAULT_X_QUERY,
+    searchQuery: defaultBuilt.preview,
+    queryGroups: defaultBuilt.queries,
     retentionDays: Number(process.env.SOCIAL_RETENTION_DAYS || 30),
     filterDistricts: [],
+    filterIncidentTypes: [],
+    filterLocationRefs: [],
+    additionalKeywords: '',
     lastSyncStatus: 'idle',
     lastImportedCount: 0,
     updatedAt: now
@@ -262,9 +315,11 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
 export async function updateSocialConfig(
   db: DatabaseAdapter,
   updates: {
-    searchQuery?: string;
     retentionDays?: number;
     filterDistricts?: string[];
+    filterIncidentTypes?: IncidentFilterKey[];
+    filterLocationRefs?: LocationReferenceKey[];
+    additionalKeywords?: string | null;
     filterDateFrom?: string | null;
     filterDateTo?: string | null;
   },
@@ -276,6 +331,23 @@ export async function updateSocialConfig(
     updates.filterDistricts !== undefined
       ? sanitizeAllowedDistricts(updates.filterDistricts)
       : current.filterDistricts;
+
+  const nextIncidentTypes =
+    updates.filterIncidentTypes !== undefined
+      ? sanitizeIncidentFilterKeys(updates.filterIncidentTypes)
+      : current.filterIncidentTypes;
+
+  const nextLocationRefs =
+    updates.filterLocationRefs !== undefined
+      ? sanitizeLocationRefKeys(updates.filterLocationRefs)
+      : current.filterLocationRefs;
+
+  const nextAdditionalKeywords =
+    updates.additionalKeywords === null
+      ? ''
+      : updates.additionalKeywords !== undefined
+      ? sanitizeAdditionalKeywords(updates.additionalKeywords)
+      : current.additionalKeywords;
 
   const rawFrom =
     updates.filterDateFrom === null
@@ -292,9 +364,13 @@ export async function updateSocialConfig(
 
   const validatedDates = validateDateRange(rawFrom, rawTo);
 
-  const nextQuery = updates.searchQuery
-    ? sanitizeExternalText(updates.searchQuery, 250)
-    : buildXRecentSearchQuery(nextDistricts, current.searchQuery);
+  // Build final query exclusively on backend from structured filter selections (never persist final query as base)
+  const built = buildXRecentSearchQueries({
+    selectedDistricts: nextDistricts,
+    incidentTypes: nextIncidentTypes,
+    locationReferences: nextLocationRefs,
+    additionalKeywords: nextAdditionalKeywords
+  });
 
   const nextRetention =
     typeof updates.retentionDays === 'number' && Number.isFinite(updates.retentionDays)
@@ -304,12 +380,17 @@ export async function updateSocialConfig(
 
   await db.execute(
     `UPDATE social_configs
-     SET search_query = ?, retention_days = ?, filter_districts = ?, filter_date_from = ?, filter_date_to = ?, updated_at = ?, updated_by = ?
+     SET search_query = ?, retention_days = ?, filter_districts = ?,
+         filter_incident_types = ?, filter_location_refs = ?, additional_keywords = ?,
+         filter_date_from = ?, filter_date_to = ?, updated_at = ?, updated_by = ?
      WHERE id = ?`,
     [
-      nextQuery,
+      built.preview,
       nextRetention,
       JSON.stringify(nextDistricts),
+      JSON.stringify(nextIncidentTypes),
+      JSON.stringify(nextLocationRefs),
+      nextAdditionalKeywords,
       validatedDates.dateFrom ?? null,
       validatedDates.dateTo ?? null,
       now,
@@ -325,7 +406,7 @@ export async function updateSocialConfig(
     actorRole: actor.role,
     targetType: 'social_config',
     targetId: 'x-default',
-    details: `Filtros actualizados (distritos: ${nextDistricts.length > 0 ? nextDistricts.join(', ') : 'Todos'}, fechas: ${validatedDates.dateFrom || '—'} a ${validatedDates.dateTo || '—'}). Consulta: "${nextQuery}", retención: ${nextRetention} días.`
+    details: `Filtros actualizados (tipos: ${nextIncidentTypes.length > 0 ? nextIncidentTypes.join(', ') : 'Todos'}, ubicación: ${nextLocationRefs.length > 0 ? nextLocationRefs.join(', ') : 'Cualquiera'}, distritos: ${nextDistricts.length > 0 ? nextDistricts.join(', ') : 'Todos'}, adicionales: "${nextAdditionalKeywords || '—'}", fechas: ${validatedDates.dateFrom || '—'} a ${validatedDates.dateTo || '—'}). Grupos X: ${built.queries.length}, retención: ${nextRetention} días.`
   });
 
   return getOrCreateSocialConfig(db);
@@ -532,6 +613,8 @@ export async function insertSocialPostsDeduped(
 export interface ListSocialPostsFilter {
   status?: SocialPostStatus;
   districts?: string[];
+  incidentTypes?: IncidentFilterKey[];
+  locationRefs?: LocationReferenceKey[];
   dateFrom?: string;
   dateTo?: string;
 }
@@ -602,7 +685,21 @@ export async function listSocialPosts(
      ${orderClause}`;
 
   const rows = await db.query<SocialPostRow>(sql, params);
-  return rows.map(mapSocialPostRow);
+  let posts = rows.map(mapSocialPostRow);
+
+  const selectedIncidentTypes = sanitizeIncidentFilterKeys(filters.incidentTypes);
+  if (selectedIncidentTypes.length > 0) {
+    posts = posts.filter(p =>
+      matchesIncidentFilterKeys(p.text, selectedIncidentTypes, p.suggestedCategory)
+    );
+  }
+
+  const selectedLocationRefs = sanitizeLocationRefKeys(filters.locationRefs);
+  if (selectedLocationRefs.length > 0) {
+    posts = posts.filter(p => matchesLocationReferences(p.text, selectedLocationRefs));
+  }
+
+  return posts;
 }
 
 export async function getSocialPostStats(

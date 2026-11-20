@@ -23,8 +23,16 @@ import {
   XService,
   XSyncCooldownError
 } from '../services/xService.js';
-import { ALLOWED_SOCIAL_DISTRICTS } from '../utils/sanitize.js';
-import { SocialPostStatus } from '../types.js';
+import {
+  ALLOWED_SOCIAL_DISTRICTS,
+  sanitizeIncidentFilterKeys,
+  sanitizeLocationRefKeys
+} from '../utils/sanitize.js';
+import {
+  IncidentFilterKey,
+  LocationReferenceKey,
+  SocialPostStatus
+} from '../types.js';
 
 export function createSocialRouter(db: DatabaseAdapter, xService: XService): Router {
   const router = Router();
@@ -49,7 +57,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   });
 
-  // Moderator-only: view X connection status, query, filters, and counts
+  // Moderator-only: view X connection status, structured filters, read-only query preview, and counts
   router.get(
     '/status',
     requireAuth,
@@ -63,8 +71,12 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
           xConfigured: xService.isTokenConfigured(),
           isSyncing: xService.isSyncInProgress(),
           searchQuery: config.searchQuery,
+          queryGroups: config.queryGroups,
           retentionDays: config.retentionDays,
           filterDistricts: config.filterDistricts,
+          filterIncidentTypes: config.filterIncidentTypes,
+          filterLocationRefs: config.filterLocationRefs,
+          additionalKeywords: config.additionalKeywords,
           filterDateFrom: config.filterDateFrom,
           filterDateTo: config.filterDateTo,
           allowedDistricts: [...ALLOWED_SOCIAL_DISTRICTS],
@@ -86,7 +98,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   );
 
-  // Moderator-only: update configurable X query, filters & retention policy
+  // Moderator-only: update structured visual filters & retention policy (query built strictly on backend)
   router.put(
     '/config',
     requireAuth,
@@ -94,25 +106,42 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     moderationLimiter,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const { searchQuery, retentionDays, filterDistricts, filterDateFrom, filterDateTo } =
-          req.body as {
-            searchQuery?: string;
-            retentionDays?: number;
-            filterDistricts?: string[];
-            filterDateFrom?: string | null;
-            filterDateTo?: string | null;
-          };
+        const {
+          retentionDays,
+          filterDistricts,
+          filterIncidentTypes,
+          filterLocationRefs,
+          additionalKeywords,
+          filterDateFrom,
+          filterDateTo
+        } = req.body as {
+          retentionDays?: number;
+          filterDistricts?: string[];
+          filterIncidentTypes?: IncidentFilterKey[];
+          filterLocationRefs?: LocationReferenceKey[];
+          additionalKeywords?: string | null;
+          filterDateFrom?: string | null;
+          filterDateTo?: string | null;
+        };
 
-        if (searchQuery !== undefined && (!searchQuery.trim() || searchQuery.trim().length < 3)) {
+        if (typeof additionalKeywords === 'string' && additionalKeywords.trim().length > 80) {
           res.status(400).json({
-            error: 'La consulta de búsqueda debe tener al menos 3 caracteres.'
+            error: 'Las palabras adicionales permiten un máximo de 80 caracteres.'
           });
           return;
         }
 
         const updated = await updateSocialConfig(
           db,
-          { searchQuery, retentionDays, filterDistricts, filterDateFrom, filterDateTo },
+          {
+            retentionDays,
+            filterDistricts,
+            filterIncidentTypes,
+            filterLocationRefs,
+            additionalKeywords,
+            filterDateFrom,
+            filterDateTo
+          },
           req.authUser!
         );
 
@@ -139,11 +168,17 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
       try {
         const body = (req.body || {}) as {
           districts?: string[];
+          incidentTypes?: IncidentFilterKey[];
+          locationReferences?: LocationReferenceKey[];
+          additionalKeywords?: string;
           dateFrom?: string;
           dateTo?: string;
         };
         const hasFiltersInBody =
           body.districts !== undefined ||
+          body.incidentTypes !== undefined ||
+          body.locationReferences !== undefined ||
+          body.additionalKeywords !== undefined ||
           body.dateFrom !== undefined ||
           body.dateTo !== undefined;
 
@@ -153,6 +188,9 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
           hasFiltersInBody
             ? {
                 districts: body.districts,
+                incidentTypes: body.incidentTypes,
+                locationReferences: body.locationReferences,
+                additionalKeywords: body.additionalKeywords,
                 dateFrom: body.dateFrom,
                 dateTo: body.dateTo
               }
@@ -212,7 +250,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   );
 
-  // Moderator-only: list imported social posts (pending, verified, discarded) with district/date filters
+  // Moderator-only: list imported social posts (pending, verified, discarded) with visual filters
   router.get(
     '/posts',
     requireAuth,
@@ -234,6 +272,24 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
           .map(d => d.trim())
           .filter(Boolean);
 
+        const rawIncidentTypes =
+          typeof req.query.incidentTypes === 'string' ? req.query.incidentTypes : '';
+        const incidentTypes = sanitizeIncidentFilterKeys(
+          rawIncidentTypes
+            .split(',')
+            .map(t => t.trim())
+            .filter(Boolean)
+        );
+
+        const rawLocationRefs =
+          typeof req.query.locationRefs === 'string' ? req.query.locationRefs : '';
+        const locationRefs = sanitizeLocationRefKeys(
+          rawLocationRefs
+            .split(',')
+            .map(r => r.trim())
+            .filter(Boolean)
+        );
+
         const dateFrom =
           typeof req.query.dateFrom === 'string' ? req.query.dateFrom.trim() || undefined : undefined;
         const dateTo =
@@ -242,6 +298,8 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
         const posts = await listSocialPosts(db, {
           status: filterStatus,
           districts: districts.length > 0 ? districts : undefined,
+          incidentTypes: incidentTypes.length > 0 ? incidentTypes : undefined,
+          locationRefs: locationRefs.length > 0 ? locationRefs : undefined,
           dateFrom,
           dateTo
         });

@@ -1,6 +1,8 @@
 import {
   IncidentCategory,
+  IncidentFilterKey,
   IncidentReport,
+  LocationReferenceKey,
   RiskLevel,
   SocialPost,
   SocialPostStatus,
@@ -72,8 +74,12 @@ export interface SocialStatusResponse {
   xConfigured: boolean;
   isSyncing: boolean;
   searchQuery: string;
+  queryGroups?: string[];
   retentionDays: number;
   filterDistricts?: string[];
+  filterIncidentTypes?: IncidentFilterKey[];
+  filterLocationRefs?: LocationReferenceKey[];
+  additionalKeywords?: string;
   filterDateFrom?: string;
   filterDateTo?: string;
   allowedDistricts?: string[];
@@ -306,6 +312,9 @@ export async function fetchSocialStatus(user: UserProfile | null): Promise<Socia
 
 export interface SocialFilterOptions {
   districts?: string[];
+  incidentTypes?: IncidentFilterKey[];
+  locationReferences?: LocationReferenceKey[];
+  additionalKeywords?: string;
   dateFrom?: string;
   dateTo?: string;
 }
@@ -313,16 +322,22 @@ export interface SocialFilterOptions {
 export async function updateSocialConfig(
   user: UserProfile | null,
   payload: {
-    searchQuery?: string;
     retentionDays?: number;
     filterDistricts?: string[];
+    filterIncidentTypes?: IncidentFilterKey[];
+    filterLocationRefs?: LocationReferenceKey[];
+    additionalKeywords?: string | null;
     filterDateFrom?: string | null;
     filterDateTo?: string | null;
   }
 ): Promise<{
   searchQuery: string;
+  queryGroups?: string[];
   retentionDays: number;
   filterDistricts?: string[];
+  filterIncidentTypes?: IncidentFilterKey[];
+  filterLocationRefs?: LocationReferenceKey[];
+  additionalKeywords?: string;
   filterDateFrom?: string;
   filterDateTo?: string;
 }> {
@@ -333,8 +348,12 @@ export async function updateSocialConfig(
   const data = (await res.json()) as {
     config?: {
       searchQuery: string;
+      queryGroups?: string[];
       retentionDays: number;
       filterDistricts?: string[];
+      filterIncidentTypes?: IncidentFilterKey[];
+      filterLocationRefs?: LocationReferenceKey[];
+      additionalKeywords?: string;
       filterDateFrom?: string;
       filterDateTo?: string;
     };
@@ -361,6 +380,7 @@ export async function triggerXSync(
     duplicatesSkipped: number;
     discardReasons?: string[];
     queryUsed: string;
+    queryGroups?: string[];
     maxPostsLimit?: number;
     cooldownMinutes?: number;
     nextAllowedSyncAt?: string;
@@ -383,6 +403,7 @@ export async function triggerXSync(
       duplicatesSkipped: number;
       discardReasons?: string[];
       queryUsed: string;
+      queryGroups?: string[];
       maxPostsLimit?: number;
       cooldownMinutes?: number;
       nextAllowedSyncAt?: string;
@@ -417,6 +438,12 @@ export async function fetchSocialPosts(
   if (filters.status) search.set('status', filters.status);
   if (filters.districts && filters.districts.length > 0) {
     search.set('districts', filters.districts.join(','));
+  }
+  if (filters.incidentTypes && filters.incidentTypes.length > 0) {
+    search.set('incidentTypes', filters.incidentTypes.join(','));
+  }
+  if (filters.locationReferences && filters.locationReferences.length > 0) {
+    search.set('locationRefs', filters.locationReferences.join(','));
   }
   if (filters.dateFrom) search.set('dateFrom', filters.dateFrom);
   if (filters.dateTo) search.set('dateTo', filters.dateTo);

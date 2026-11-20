@@ -112,12 +112,35 @@ export interface SocialSourceAudit {
   createdAt: string;
 }
 
+export type IncidentFilterKey =
+  | 'robo'
+  | 'asalto'
+  | 'balacera'
+  | 'extorsion'
+  | 'secuestro'
+  | 'arrebato'
+  | 'robo_vehiculo'
+  | 'actividad_sospechosa';
+
+export type LocationReferenceKey =
+  | 'avenida'
+  | 'calle'
+  | 'jiron'
+  | 'cuadra'
+  | 'cruce'
+  | 'esquina'
+  | 'paradero'
+  | 'mercado'
+  | 'parque'
+  | 'estacion';
+
 export interface SocialSyncStatus {
   backendAvailable: boolean;
   xConfigured: boolean;
   isDemoMode: boolean;
   isSyncing: boolean;
   searchQuery: string;
+  queryGroups?: string[];
   retentionDays: number;
   lastSyncAt?: string;
   lastSyncStatus?: 'success' | 'error' | 'idle';

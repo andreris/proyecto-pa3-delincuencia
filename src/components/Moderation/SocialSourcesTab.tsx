@@ -3,7 +3,10 @@ import { useAuth } from '../../context/AuthContext';
 import { useIncidents } from '../../context/IncidentContext';
 import {
   ALLOWED_SOCIAL_DISTRICTS,
-  DEMO_SOCIAL_POSTS
+  buildLocalQueryPreview,
+  DEMO_SOCIAL_POSTS,
+  INCIDENT_FILTER_OPTIONS,
+  LOCATION_REF_OPTIONS
 } from '../../data/demoData';
 import {
   ApiClientError,
@@ -17,7 +20,9 @@ import {
 } from '../../services/apiClient';
 import {
   IncidentCategory,
+  IncidentFilterKey,
   IncidentReport,
+  LocationReferenceKey,
   RiskLevel,
   SocialPost,
   SocialSourceAudit
@@ -34,15 +39,15 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  Search,
-  Save,
   MapPin,
   Radio,
   History,
   Filter,
   ChevronDown,
   X,
-  Calendar
+  Calendar,
+  Eye,
+  ShieldCheck
 } from 'lucide-react';
 
 const XLogoIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
@@ -76,12 +81,8 @@ export const SocialSourcesTab: React.FC = () => {
   });
   const [auditLogs, setAuditLogs] = useState<SocialSourceAudit[]>([]);
   const [statusInfo, setStatusInfo] = useState<SocialStatusResponse | null>(null);
-  const [queryInput, setQueryInput] = useState(
-    '(robo OR asalto OR extorsion OR inseguridad) lang:es -is:retweet'
-  );
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [savingQuery, setSavingQuery] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<
@@ -89,14 +90,23 @@ export const SocialSourcesTab: React.FC = () => {
   >('Pendiente de validación');
 
   // Visual filter inputs (draft vs applied)
+  const [draftIncidentTypes, setDraftIncidentTypes] = useState<IncidentFilterKey[]>([]);
+  const [draftLocationRefs, setDraftLocationRefs] = useState<LocationReferenceKey[]>([]);
+  const [draftAdditionalKeywords, setDraftAdditionalKeywords] = useState<string>('');
   const [draftDistricts, setDraftDistricts] = useState<string[]>([]);
   const [draftDateFrom, setDraftDateFrom] = useState<string>('');
   const [draftDateTo, setDraftDateTo] = useState<string>('');
+
+  const [appliedIncidentTypes, setAppliedIncidentTypes] = useState<IncidentFilterKey[]>([]);
+  const [appliedLocationRefs, setAppliedLocationRefs] = useState<LocationReferenceKey[]>([]);
+  const [appliedAdditionalKeywords, setAppliedAdditionalKeywords] = useState<string>('');
   const [appliedDistricts, setAppliedDistricts] = useState<string[]>([]);
   const [appliedDateFrom, setAppliedDateFrom] = useState<string>('');
   const [appliedDateTo, setAppliedDateTo] = useState<string>('');
+
   const [districtMenuOpen, setDistrictMenuOpen] = useState(false);
   const [filterValidationError, setFilterValidationError] = useState<string | null>(null);
+  const [filtersInitialized, setFiltersInitialized] = useState(false);
   const districtDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Geolocation review modal state
@@ -130,6 +140,8 @@ export const SocialSourcesTab: React.FC = () => {
 
   const loadBackendSocialData = async (overrideFilters?: {
     districts?: string[];
+    incidentTypes?: IncidentFilterKey[];
+    locationReferences?: LocationReferenceKey[];
     dateFrom?: string;
     dateTo?: string;
   }) => {
@@ -141,21 +153,39 @@ export const SocialSourcesTab: React.FC = () => {
       const effectiveDistricts =
         overrideFilters?.districts !== undefined
           ? overrideFilters.districts
-          : appliedDistricts.length > 0
+          : filtersInitialized
           ? appliedDistricts
           : statusData.filterDistricts || [];
+      const effectiveIncidentTypes =
+        overrideFilters?.incidentTypes !== undefined
+          ? overrideFilters.incidentTypes
+          : filtersInitialized
+          ? appliedIncidentTypes
+          : statusData.filterIncidentTypes || [];
+      const effectiveLocationRefs =
+        overrideFilters?.locationReferences !== undefined
+          ? overrideFilters.locationReferences
+          : filtersInitialized
+          ? appliedLocationRefs
+          : statusData.filterLocationRefs || [];
       const effectiveDateFrom =
         overrideFilters?.dateFrom !== undefined
           ? overrideFilters.dateFrom
-          : appliedDateFrom || statusData.filterDateFrom || '';
+          : filtersInitialized
+          ? appliedDateFrom
+          : statusData.filterDateFrom || '';
       const effectiveDateTo =
         overrideFilters?.dateTo !== undefined
           ? overrideFilters.dateTo
-          : appliedDateTo || statusData.filterDateTo || '';
+          : filtersInitialized
+          ? appliedDateTo
+          : statusData.filterDateTo || '';
 
       const [postsData, logsData] = await Promise.all([
         fetchSocialPosts(currentUser, {
           districts: effectiveDistricts,
+          incidentTypes: effectiveIncidentTypes,
+          locationReferences: effectiveLocationRefs,
           dateFrom: effectiveDateFrom || undefined,
           dateTo: effectiveDateTo || undefined
         }),
@@ -163,17 +193,26 @@ export const SocialSourcesTab: React.FC = () => {
       ]);
 
       setStatusInfo({ ...statusData, stats: postsData.stats });
-      setQueryInput(statusData.searchQuery);
-      if (overrideFilters === undefined && appliedDistricts.length === 0 && !appliedDateFrom && !appliedDateTo) {
+      if (overrideFilters === undefined && !filtersInitialized) {
         const initDistricts = statusData.filterDistricts || [];
+        const initIncidentTypes = statusData.filterIncidentTypes || [];
+        const initLocationRefs = statusData.filterLocationRefs || [];
+        const initAdditional = statusData.additionalKeywords || '';
         const initFrom = statusData.filterDateFrom || '';
         const initTo = statusData.filterDateTo || '';
         setDraftDistricts(initDistricts);
         setAppliedDistricts(initDistricts);
+        setDraftIncidentTypes(initIncidentTypes);
+        setAppliedIncidentTypes(initIncidentTypes);
+        setDraftLocationRefs(initLocationRefs);
+        setAppliedLocationRefs(initLocationRefs);
+        setDraftAdditionalKeywords(initAdditional);
+        setAppliedAdditionalKeywords(initAdditional);
         setDraftDateFrom(initFrom);
         setAppliedDateFrom(initFrom);
         setDraftDateTo(initTo);
         setAppliedDateTo(initTo);
+        setFiltersInitialized(true);
       }
       setPosts(postsData.posts);
       setAuditLogs(logsData);
@@ -189,6 +228,18 @@ export const SocialSourcesTab: React.FC = () => {
       loadBackendSocialData();
     }
   }, [backendAvailable, isModeratorAuthenticated, currentUser?.uid, currentUser?.role]);
+
+  const toggleDraftIncidentType = (key: IncidentFilterKey) => {
+    setDraftIncidentTypes(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
+
+  const toggleDraftLocationRef = (key: LocationReferenceKey) => {
+    setDraftLocationRefs(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
 
   const toggleDraftDistrict = (district: string) => {
     setDraftDistricts(prev =>
@@ -207,40 +258,56 @@ export const SocialSourcesTab: React.FC = () => {
       return;
     }
 
+    if (draftAdditionalKeywords.trim().length > 80) {
+      setFilterValidationError('Las palabras adicionales no pueden superar los 80 caracteres.');
+      return;
+    }
+
+    const nextIncidentTypes = [...draftIncidentTypes];
+    const nextLocationRefs = [...draftLocationRefs];
+    const nextAdditional = draftAdditionalKeywords.trim();
     const nextDistricts = [...draftDistricts];
     const nextFrom = draftDateFrom;
     const nextTo = draftDateTo;
 
+    setAppliedIncidentTypes(nextIncidentTypes);
+    setAppliedLocationRefs(nextLocationRefs);
+    setAppliedAdditionalKeywords(nextAdditional);
     setAppliedDistricts(nextDistricts);
     setAppliedDateFrom(nextFrom);
     setAppliedDateTo(nextTo);
     setDistrictMenuOpen(false);
+    setFiltersInitialized(true);
 
     if (nextDistricts.includes('Sin distrito') && nextDistricts.length === 1) {
       setStatusFilter('Descartado');
     }
 
     if (!backendAvailable || !isModeratorAuthenticated) {
-      setSuccessMsg('Filtros aplicados a las publicaciones de demostración.');
+      setSuccessMsg('Filtros visuales aplicados en Modo demo.');
       return;
     }
 
     setLoading(true);
     try {
-      // Save real Lima/Callao districts & date range so they also apply to the next X sync
       const syncableDistricts = nextDistricts.filter(d => d !== 'Sin distrito');
       await updateSocialConfig(currentUser, {
         filterDistricts: syncableDistricts,
+        filterIncidentTypes: nextIncidentTypes,
+        filterLocationRefs: nextLocationRefs,
+        additionalKeywords: nextAdditional,
         filterDateFrom: nextFrom || null,
         filterDateTo: nextTo || null
       });
       await loadBackendSocialData({
         districts: nextDistricts,
+        incidentTypes: nextIncidentTypes,
+        locationReferences: nextLocationRefs,
         dateFrom: nextFrom,
         dateTo: nextTo
       });
       setSuccessMsg(
-        'Filtros aplicados a las publicaciones importadas y guardados para la próxima consulta a X.'
+        'Filtros aplicados a las publicaciones importadas y guardados para construir la consulta de X en el servidor.'
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'No se pudieron aplicar los filtros.');
@@ -252,13 +319,20 @@ export const SocialSourcesTab: React.FC = () => {
     setFilterValidationError(null);
     setErrorMsg(null);
     setSuccessMsg(null);
+    setDraftIncidentTypes([]);
+    setDraftLocationRefs([]);
+    setDraftAdditionalKeywords('');
     setDraftDistricts([]);
     setDraftDateFrom('');
     setDraftDateTo('');
+    setAppliedIncidentTypes([]);
+    setAppliedLocationRefs([]);
+    setAppliedAdditionalKeywords('');
     setAppliedDistricts([]);
     setAppliedDateFrom('');
     setAppliedDateTo('');
     setDistrictMenuOpen(false);
+    setFiltersInitialized(true);
 
     if (!backendAvailable || !isModeratorAuthenticated) {
       setSuccessMsg('Filtros restablecidos.');
@@ -269,14 +343,70 @@ export const SocialSourcesTab: React.FC = () => {
     try {
       await updateSocialConfig(currentUser, {
         filterDistricts: [],
+        filterIncidentTypes: [],
+        filterLocationRefs: [],
+        additionalKeywords: '',
         filterDateFrom: null,
         filterDateTo: null
       });
-      await loadBackendSocialData({ districts: [], dateFrom: '', dateTo: '' });
+      await loadBackendSocialData({
+        districts: [],
+        incidentTypes: [],
+        locationReferences: [],
+        dateFrom: '',
+        dateTo: ''
+      });
       setSuccessMsg('Filtros limpiados.');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'No se pudieron limpiar los filtros.');
       setLoading(false);
+    }
+  };
+
+  const removeActiveIncidentChip = async (key: IncidentFilterKey) => {
+    const next = appliedIncidentTypes.filter(k => k !== key);
+    setDraftIncidentTypes(next);
+    setAppliedIncidentTypes(next);
+    if (backendAvailable && isModeratorAuthenticated) {
+      await updateSocialConfig(currentUser, { filterIncidentTypes: next }).catch(() => {});
+      await loadBackendSocialData({
+        districts: appliedDistricts,
+        incidentTypes: next,
+        locationReferences: appliedLocationRefs,
+        dateFrom: appliedDateFrom,
+        dateTo: appliedDateTo
+      });
+    }
+  };
+
+  const removeActiveLocationRefChip = async (key: LocationReferenceKey) => {
+    const next = appliedLocationRefs.filter(k => k !== key);
+    setDraftLocationRefs(next);
+    setAppliedLocationRefs(next);
+    if (backendAvailable && isModeratorAuthenticated) {
+      await updateSocialConfig(currentUser, { filterLocationRefs: next }).catch(() => {});
+      await loadBackendSocialData({
+        districts: appliedDistricts,
+        incidentTypes: appliedIncidentTypes,
+        locationReferences: next,
+        dateFrom: appliedDateFrom,
+        dateTo: appliedDateTo
+      });
+    }
+  };
+
+  const clearAdditionalKeywordsChip = async () => {
+    setDraftAdditionalKeywords('');
+    setAppliedAdditionalKeywords('');
+    if (backendAvailable && isModeratorAuthenticated) {
+      await updateSocialConfig(currentUser, { additionalKeywords: '' }).catch(() => {});
+      await loadBackendSocialData({
+        districts: appliedDistricts,
+        incidentTypes: appliedIncidentTypes,
+        locationReferences: appliedLocationRefs,
+        dateFrom: appliedDateFrom,
+        dateTo: appliedDateTo
+      });
     }
   };
 
@@ -289,6 +419,8 @@ export const SocialSourcesTab: React.FC = () => {
       await updateSocialConfig(currentUser, { filterDistricts: syncableDistricts }).catch(() => {});
       await loadBackendSocialData({
         districts: next,
+        incidentTypes: appliedIncidentTypes,
+        locationReferences: appliedLocationRefs,
         dateFrom: appliedDateFrom,
         dateTo: appliedDateTo
       });
@@ -309,6 +441,8 @@ export const SocialSourcesTab: React.FC = () => {
       }).catch(() => {});
       await loadBackendSocialData({
         districts: appliedDistricts,
+        incidentTypes: appliedIncidentTypes,
+        locationReferences: appliedLocationRefs,
         dateFrom: nextFrom,
         dateTo: nextTo
       });
@@ -332,15 +466,27 @@ export const SocialSourcesTab: React.FC = () => {
       return;
     }
 
-    const effectiveDistricts = (draftDistricts.length > 0 ? draftDistricts : appliedDistricts).filter(
-      d => d !== 'Sin distrito'
-    );
+    const effectiveDistricts = draftDistricts.filter(d => d !== 'Sin distrito');
+    const effectiveIncidentTypes = [...draftIncidentTypes];
+    const effectiveLocationRefs = [...draftLocationRefs];
+    const effectiveAdditional = draftAdditionalKeywords.trim();
+
+    if (effectiveAdditional.length > 80) {
+      setFilterValidationError('Las palabras adicionales no pueden superar los 80 caracteres.');
+      return;
+    }
 
     if (!backendAvailable || !xConfigured) {
       // Demo simulation when backend or X_BEARER_TOKEN is not configured
       setSyncing(true);
       setTimeout(() => {
         setSyncing(false);
+        setAppliedIncidentTypes(effectiveIncidentTypes);
+        setAppliedLocationRefs(effectiveLocationRefs);
+        setAppliedAdditionalKeywords(effectiveAdditional);
+        setAppliedDistricts(draftDistricts);
+        setAppliedDateFrom(effectiveFrom);
+        setAppliedDateTo(effectiveTo);
         setStatusFilter('Pendiente de validación');
         setSuccessMsg(
           'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración filtradas en Lima Metropolitana, Perú.'
@@ -353,9 +499,15 @@ export const SocialSourcesTab: React.FC = () => {
     try {
       const res = await triggerXSync(currentUser, {
         districts: effectiveDistricts,
+        incidentTypes: effectiveIncidentTypes,
+        locationReferences: effectiveLocationRefs,
+        additionalKeywords: effectiveAdditional,
         dateFrom: effectiveFrom || undefined,
         dateTo: effectiveTo || undefined
       });
+      setAppliedIncidentTypes(effectiveIncidentTypes);
+      setAppliedLocationRefs(effectiveLocationRefs);
+      setAppliedAdditionalKeywords(effectiveAdditional);
       setAppliedDistricts(draftDistricts);
       setAppliedDateFrom(effectiveFrom);
       setAppliedDateTo(effectiveTo);
@@ -363,6 +515,8 @@ export const SocialSourcesTab: React.FC = () => {
       setSuccessMsg(res.message);
       await loadBackendSocialData({
         districts: draftDistricts,
+        incidentTypes: effectiveIncidentTypes,
+        locationReferences: effectiveLocationRefs,
         dateFrom: effectiveFrom,
         dateTo: effectiveTo
       });
@@ -401,30 +555,6 @@ export const SocialSourcesTab: React.FC = () => {
       }
     } finally {
       setSyncing(false);
-    }
-  };
-
-  const handleSaveQuery = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isModeratorAuthenticated || !isModerator) return;
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    if (!backendAvailable) {
-      setSuccessMsg('Consulta actualizada localmente (Modo demo).');
-      return;
-    }
-
-    setSavingQuery(true);
-    try {
-      const updated = await updateSocialConfig(currentUser, { searchQuery: queryInput });
-      setQueryInput(updated.searchQuery);
-      setSuccessMsg('Consulta de búsqueda oficial actualizada y registrada en auditoría.');
-      await loadBackendSocialData();
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'No se pudo guardar la consulta.');
-    } finally {
-      setSavingQuery(false);
     }
   };
 
@@ -715,6 +845,22 @@ export const SocialSourcesTab: React.FC = () => {
         }
       }
 
+      if (appliedIncidentTypes.length > 0) {
+        const matchesIncident = appliedIncidentTypes.some(key => {
+          const def = INCIDENT_FILTER_OPTIONS.find(o => o.key === key);
+          return def ? def.matchRegex.test(post.text) : false;
+        });
+        if (!matchesIncident) return false;
+      }
+
+      if (appliedLocationRefs.length > 0) {
+        const matchesLocRef = appliedLocationRefs.some(key => {
+          const def = LOCATION_REF_OPTIONS.find(o => o.key === key);
+          return def ? def.matchRegex.test(post.text) : false;
+        });
+        if (!matchesLocRef) return false;
+      }
+
       if (appliedDateFrom || appliedDateTo) {
         const publishedMs = new Date(post.publishedAt).getTime();
         if (Number.isFinite(publishedMs)) {
@@ -731,10 +877,36 @@ export const SocialSourcesTab: React.FC = () => {
 
       return true;
     });
-  }, [posts, appliedDistricts, appliedDateFrom, appliedDateTo]);
+  }, [
+    posts,
+    appliedDistricts,
+    appliedIncidentTypes,
+    appliedLocationRefs,
+    appliedDateFrom,
+    appliedDateTo
+  ]);
+
+  const liveQueryPreview = useMemo(
+    () =>
+      buildLocalQueryPreview({
+        incidentTypes: draftIncidentTypes,
+        locationRefs: draftLocationRefs,
+        additionalKeywords: draftAdditionalKeywords,
+        districts: draftDistricts
+      }),
+    [draftIncidentTypes, draftLocationRefs, draftAdditionalKeywords, draftDistricts]
+  );
+
+  const hasActiveFilters =
+    appliedIncidentTypes.length > 0 ||
+    appliedLocationRefs.length > 0 ||
+    Boolean(appliedAdditionalKeywords) ||
+    appliedDistricts.length > 0 ||
+    Boolean(appliedDateFrom) ||
+    Boolean(appliedDateTo);
 
   const totalCount =
-    backendAvailable && statusInfo?.stats && appliedDistricts.length === 0 && !appliedDateFrom && !appliedDateTo
+    backendAvailable && statusInfo?.stats && !hasActiveFilters
       ? statusInfo.stats.total
       : filteredPosts.length;
   const pendingPostsCount = filteredPosts.filter(p => p.status === 'Pendiente de validación').length;
@@ -749,8 +921,6 @@ export const SocialSourcesTab: React.FC = () => {
   const allowedDistrictOptions = statusInfo?.allowedDistricts?.length
     ? statusInfo.allowedDistricts
     : [...ALLOWED_SOCIAL_DISTRICTS];
-  const hasActiveFilters =
-    appliedDistricts.length > 0 || Boolean(appliedDateFrom) || Boolean(appliedDateTo);
 
   const maxPostsPerSync = statusInfo?.maxPostsPerSync ?? 10;
   const cooldownMinutes = statusInfo?.cooldownMinutes ?? 60;
@@ -890,15 +1060,15 @@ export const SocialSourcesTab: React.FC = () => {
           </div>
         </div>
 
-        {/* Visual District & Date Filters (apply to imported posts AND next X sync) */}
+        {/* Visual Structured Filters (Incident Types, Location References, Optional Keywords, Districts, Dates) */}
         <form
           onSubmit={handleApplyFilters}
-          className="pt-3 border-t border-slate-100 space-y-3"
+          className="pt-3 border-t border-slate-100 space-y-4"
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
               <Filter className="w-3.5 h-3.5 text-blue-600" />
-              <span>Filtros de Lima Metropolitana, Perú (importadas y próxima consulta X)</span>
+              <span>Filtros visuales de seguridad (Lima Metropolitana, Perú)</span>
             </div>
             <span className="text-[11px] text-slate-400 hidden sm:inline">
               {statusInfo?.lastSyncAt
@@ -907,11 +1077,107 @@ export const SocialSourcesTab: React.FC = () => {
             </span>
           </div>
 
+          {/* Group 1: Tipo de incidente */}
+          <div className="space-y-2">
+            <label className="block text-[11px] font-bold text-slate-700">
+              1. Tipo de incidente
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setDraftIncidentTypes([])}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                  draftIncidentTypes.length === 0
+                    ? 'bg-[#0B1F3A] text-white border-[#0B1F3A] shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Todos los incidentes
+              </button>
+              {INCIDENT_FILTER_OPTIONS.map(opt => {
+                const selected = draftIncidentTypes.includes(opt.key);
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => toggleDraftIncidentType(opt.key)}
+                    aria-pressed={selected}
+                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors inline-flex items-center gap-1.5 ${
+                      selected
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      readOnly
+                      tabIndex={-1}
+                      className="pointer-events-none rounded border-slate-300 text-blue-600 w-3 h-3"
+                    />
+                    <span>{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Group 2: Referencia de ubicación */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="block text-[11px] font-bold text-slate-700">
+                2. Referencia de ubicación (exige pista vial o lugar en la publicación)
+              </label>
+              <span className="text-[10px] text-slate-500">
+                Si seleccionas referencias, se descartarán posts sin mención de vía o lugar
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setDraftLocationRefs([])}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                  draftLocationRefs.length === 0
+                    ? 'bg-[#0B1F3A] text-white border-[#0B1F3A] shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Cualquier referencia de ubicación
+              </button>
+              {LOCATION_REF_OPTIONS.map(opt => {
+                const selected = draftLocationRefs.includes(opt.key);
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => toggleDraftLocationRef(opt.key)}
+                    aria-pressed={selected}
+                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-colors inline-flex items-center gap-1.5 ${
+                      selected
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      readOnly
+                      tabIndex={-1}
+                      className="pointer-events-none rounded border-slate-300 text-emerald-600 w-3 h-3"
+                    />
+                    <span>{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Optional additional words + Districts + Date Range */}
           <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end text-xs">
-            {/* Multi-select District Selector */}
-            <div className="md:col-span-5 relative" ref={districtDropdownRef}>
+            {/* Distritos permitidos */}
+            <div className="md:col-span-4 relative" ref={districtDropdownRef}>
               <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                Distritos permitidos
+                Distritos permitidos (Lima Metropolitana)
               </label>
               <button
                 type="button"
@@ -930,18 +1196,27 @@ export const SocialSourcesTab: React.FC = () => {
 
               {districtMenuOpen && (
                 <div className="absolute left-0 right-0 mt-1.5 z-30 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 max-h-64 overflow-y-auto space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => setDraftDistricts([])}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-between ${
-                      draftDistricts.length === 0
-                        ? 'bg-blue-50 text-blue-700'
-                        : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <span>Todos los distritos</span>
-                    {draftDistricts.length === 0 && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  </button>
+                  <div className="flex items-center gap-1.5 px-1 pb-1">
+                    <button
+                      type="button"
+                      onClick={() => setDraftDistricts([])}
+                      className={`flex-1 text-left px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-between ${
+                        draftDistricts.length === 0
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>Todos los distritos</span>
+                      {draftDistricts.length === 0 && <CheckCircle2 className="w-3.5 h-3.5" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraftDistricts([...allowedDistrictOptions])}
+                      className="px-2 py-1.5 rounded-lg text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100"
+                    >
+                      Los {allowedDistrictOptions.length}
+                    </button>
+                  </div>
                   <div className="border-t border-slate-100 my-1" />
                   {allowedDistrictOptions.map(district => {
                     const checked = draftDistricts.includes(district);
@@ -976,20 +1251,38 @@ export const SocialSourcesTab: React.FC = () => {
               )}
             </div>
 
+            {/* Palabras adicionales opcionales (máx. 80 caracteres) */}
+            <div className="md:col-span-3">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-bold text-slate-600">
+                  Palabras adicionales (opcional)
+                </label>
+                <span className="text-[10px] text-slate-400">
+                  {draftAdditionalKeywords.length}/80
+                </span>
+              </div>
+              <input
+                type="text"
+                value={draftAdditionalKeywords}
+                onChange={e => setDraftAdditionalKeywords(e.target.value)}
+                maxLength={80}
+                placeholder="Ej: motocicleta nocturno"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-xs"
+              />
+            </div>
+
             {/* Fecha desde */}
             <div className="md:col-span-2">
               <label className="block text-[11px] font-bold text-slate-600 mb-1">
                 Fecha desde
               </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  aria-label="Fecha desde"
-                  value={draftDateFrom}
-                  onChange={e => setDraftDateFrom(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
-                />
-              </div>
+              <input
+                type="date"
+                aria-label="Fecha desde"
+                value={draftDateFrom}
+                onChange={e => setDraftDateFrom(e.target.value)}
+                className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
+              />
             </div>
 
             {/* Fecha hasta */}
@@ -997,23 +1290,21 @@ export const SocialSourcesTab: React.FC = () => {
               <label className="block text-[11px] font-bold text-slate-600 mb-1">
                 Fecha hasta
               </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  aria-label="Fecha hasta"
-                  value={draftDateTo}
-                  onChange={e => setDraftDateTo(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
-                />
-              </div>
+              <input
+                type="date"
+                aria-label="Fecha hasta"
+                value={draftDateTo}
+                onChange={e => setDraftDateTo(e.target.value)}
+                className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
+              />
             </div>
 
             {/* Apply / Clear buttons */}
-            <div className="md:col-span-3 flex items-center gap-2">
+            <div className="md:col-span-12 flex flex-wrap items-center gap-2 pt-1">
               <button
                 type="submit"
                 disabled={loading || syncing}
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs"
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs"
               >
                 Aplicar filtros
               </button>
@@ -1021,10 +1312,13 @@ export const SocialSourcesTab: React.FC = () => {
                 type="button"
                 onClick={handleClearFilters}
                 disabled={loading || syncing}
-                className="px-3 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs"
+                className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs"
               >
                 Limpiar filtros
               </button>
+              <span className="text-[11px] text-slate-400 ml-auto">
+                Retención de descartados: {statusInfo?.retentionDays || 30} días
+              </span>
             </div>
           </div>
 
@@ -1041,13 +1335,66 @@ export const SocialSourcesTab: React.FC = () => {
               <span className="text-[11px] font-semibold text-slate-500 mr-1">
                 Filtros activos:
               </span>
+              {appliedIncidentTypes.map(key => {
+                const label =
+                  INCIDENT_FILTER_OPTIONS.find(o => o.key === key)?.label || key;
+                return (
+                  <span
+                    key={`inc-${key}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border bg-blue-50 text-blue-800 border-blue-200"
+                  >
+                    <span>Incidente: {label}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeActiveIncidentChip(key)}
+                      aria-label={`Quitar incidente ${label}`}
+                      className="hover:text-red-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+              {appliedLocationRefs.map(key => {
+                const label =
+                  LOCATION_REF_OPTIONS.find(o => o.key === key)?.label || key;
+                return (
+                  <span
+                    key={`loc-${key}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border bg-emerald-50 text-emerald-800 border-emerald-200"
+                  >
+                    <span>Ubicación: {label}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeActiveLocationRefChip(key)}
+                      aria-label={`Quitar ubicación ${label}`}
+                      className="hover:text-red-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+              {appliedAdditionalKeywords && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border bg-purple-50 text-purple-800 border-purple-200">
+                  <span>Adicional: "{appliedAdditionalKeywords}"</span>
+                  <button
+                    type="button"
+                    onClick={clearAdditionalKeywordsChip}
+                    aria-label="Quitar palabras adicionales"
+                    className="hover:text-red-600"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
               {appliedDistricts.map(district => (
                 <span
                   key={district}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
                     district === 'Sin distrito'
                       ? 'bg-slate-100 text-slate-700 border-slate-300'
-                      : 'bg-blue-50 text-blue-800 border-blue-200'
+                      : 'bg-sky-50 text-sky-800 border-sky-200'
                   }`}
                 >
                   <span>
@@ -1096,41 +1443,32 @@ export const SocialSourcesTab: React.FC = () => {
             </div>
           )}
 
-          <p className="text-[11px] text-slate-400">
-            X API v2 Recent Search consulta publicaciones recientes (típicamente hasta los últimos 7 días). Si X rechaza el rango de fechas solicitado, se mostrará el aviso correspondiente.
-          </p>
-        </form>
-
-        {/* Moderator Configurable Search Query */}
-        <form onSubmit={handleSaveQuery} className="pt-2 border-t border-slate-100 space-y-2">
-          <label className="block text-xs font-bold text-slate-800">
-            Palabras clave base para X API v2 (solo moderadores):
-          </label>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={queryInput}
-                onChange={e => setQueryInput(e.target.value)}
-                disabled={!isModeratorAuthenticated}
-                maxLength={250}
-                placeholder="Ej: (robo OR asalto OR extorsion OR inseguridad) lang:es -is:retweet"
-                className="w-full text-xs pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono disabled:opacity-60"
-              />
+          {/* Read-only preview of backend-generated X query */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-800">
+                <Eye className="w-3.5 h-3.5 text-blue-600" />
+                <span>Vista previa de la consulta generada (solo lectura, construida en backend)</span>
+              </div>
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                <ShieldCheck className="w-3 h-3" />
+                {liveQueryPreview.queries.length > 1
+                  ? `${liveQueryPreview.queries.length} grupos secuenciales (máx. ${maxPostsPerSync} posts totales)`
+                  : '1 consulta válida (≤ 512 caracteres)'}
+              </span>
             </div>
-            <button
-              type="submit"
-              disabled={!isModeratorAuthenticated || savingQuery}
-              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0"
+
+            <pre
+              aria-label="Vista previa de la consulta X"
+              className="text-[11px] font-mono text-slate-700 bg-white p-2.5 rounded-xl border border-slate-200 whitespace-pre-wrap break-words select-all"
             >
-              <Save className="w-3.5 h-3.5" />
-              {savingQuery ? 'Guardando...' : 'Guardar consulta'}
-            </button>
+              {liveQueryPreview.preview}
+            </pre>
+
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              Exclusiones automáticas activas contra falsos positivos bancarios o de trámites (<code className="text-slate-600">-banco -bancos -tramite -trámite -papeles -documentos -licencia -municipalidad</code>), idioma español (<code className="text-slate-600">lang:es</code>) y sin retuits (<code className="text-slate-600">-is:retweet</code>). Máximo {maxPostsPerSync} publicaciones cada {cooldownMinutes} min.
+            </p>
           </div>
-          <p className="text-[11px] text-slate-400">
-            Solo procesa publicaciones públicas recientes en una única consulta (sin paginación, máx. {maxPostsPerSync} posts cada {cooldownMinutes} min). Retención automática de descartados: {statusInfo?.retentionDays || 30} días.
-          </p>
         </form>
       </div>
 

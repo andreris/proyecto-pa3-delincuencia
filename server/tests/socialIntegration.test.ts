@@ -1185,3 +1185,279 @@ test('GeocoderService valida Nominatim PE/Lima y rechaza resultados extranjeros 
   assert.equal(callaoRes.isOutsideLima, true);
 });
 
+test('Constructor de consultas visuales: Asalto+Avenida+Comas, Balacera+Cruce+Lima, múltiples filtros sin truncamiento y 29 distritos en grupos secuenciales', async () => {
+  const {
+    ALLOWED_SOCIAL_DISTRICTS,
+    ALL_INCIDENT_FILTER_KEYS,
+    ALL_LOCATION_REF_KEYS,
+    buildXRecentSearchQueries,
+    hasBalancedParentheses,
+    hasBalancedQuotes
+  } = await import('../src/utils/sanitize.js');
+
+  // 1. Asalto + Avenida + Comas
+  const asaltoAvenidaComas = buildXRecentSearchQueries({
+    incidentTypes: ['asalto'],
+    locationReferences: ['avenida'],
+    selectedDistricts: ['Comas']
+  });
+  assert.equal(asaltoAvenidaComas.queries.length, 1);
+  const q1 = asaltoAvenidaComas.queries[0];
+  assert.ok(q1.length <= 512);
+  assert.equal(hasBalancedParentheses(q1), true);
+  assert.equal(hasBalancedQuotes(q1), true);
+  assert.ok(q1.includes('asalto'));
+  assert.ok(q1.includes('(avenida OR av)'));
+  assert.ok(q1.includes('(Comas)'));
+  assert.ok(q1.includes('-banco -bancos -tramite -trámite'));
+  assert.ok(q1.includes('lang:es -is:retweet'));
+
+  // 2. Balacera + Cruce + Lima
+  const balaceraCruceLima = buildXRecentSearchQueries({
+    incidentTypes: ['balacera'],
+    locationReferences: ['cruce'],
+    selectedDistricts: ['Lima']
+  });
+  assert.equal(balaceraCruceLima.queries.length, 1);
+  const q2 = balaceraCruceLima.queries[0];
+  assert.ok(q2.length <= 512);
+  assert.equal(hasBalancedParentheses(q2), true);
+  assert.equal(hasBalancedQuotes(q2), true);
+  assert.ok(q2.includes('(balacera OR disparos OR tiroteo)'));
+  assert.ok(q2.includes('(cruce OR interseccion)'));
+  assert.ok(q2.includes('(Lima)'));
+
+  // 3. Múltiples tipos y referencias + palabras adicionales nunca produce consultas truncadas
+  const combo = buildXRecentSearchQueries({
+    incidentTypes: ALL_INCIDENT_FILTER_KEYS.slice(0, 6),
+    locationReferences: ALL_LOCATION_REF_KEYS.slice(0, 7),
+    additionalKeywords: 'motocicleta nocturno encapuchado sospechoso vigilancia vecinal',
+    selectedDistricts: ['San Juan de Lurigancho', 'Comas', 'Los Olivos']
+  });
+  assert.ok(combo.queries.length >= 1);
+  for (const q of combo.queries) {
+    assert.ok(q.length <= 512, `Consulta excede 512 chars: ${q.length}`);
+    assert.equal(hasBalancedParentheses(q), true, `Paréntesis desbalanceados: ${q}`);
+    assert.equal(hasBalancedQuotes(q), true, `Comillas desbalanceadas: ${q}`);
+    assert.equal(q.includes('…'), false);
+    assert.ok(q.endsWith('lang:es -is:retweet'));
+  }
+
+  // 4. Seleccionar todos los 29 distritos divide en grupos secuenciales válidos sin romper la consulta
+  assert.equal(ALLOWED_SOCIAL_DISTRICTS.length, 29);
+  const all29 = buildXRecentSearchQueries({
+    incidentTypes: ['robo', 'asalto'],
+    locationReferences: ['avenida', 'calle', 'paradero'],
+    selectedDistricts: [...ALLOWED_SOCIAL_DISTRICTS]
+  });
+  assert.ok(all29.queries.length >= 2, `Se esperaba división secuencial, obtuvo ${all29.queries.length}`);
+  for (const q of all29.queries) {
+    assert.ok(q.length <= 512);
+    assert.equal(hasBalancedParentheses(q), true);
+    assert.equal(hasBalancedQuotes(q), true);
+  }
+  const combinedQueries = all29.queries.join(' ');
+  for (const dist of ALLOWED_SOCIAL_DISTRICTS) {
+    assert.ok(combinedQueries.includes(dist), `Falta el distrito ${dist} en la división secuencial`);
+  }
+});
+
+test('Validación visual de filtros: descarta post sin referencia de ubicación, descarta extorsión bancaria y no confunde "comas" ortográfico con distrito Comas', async () => {
+  const originalToken = process.env.X_BEARER_TOKEN;
+  const originalCooldown = process.env.X_SYNC_COOLDOWN_MINUTES;
+  process.env.X_BEARER_TOKEN = 'test-bearer-visual-filters';
+  process.env.X_SYNC_COOLDOWN_MINUTES = '0';
+
+  const { ALLOWED_SOCIAL_DISTRICTS, detectAllowedDistrict } = await import('../src/utils/sanitize.js');
+
+  // Direct unit check: punctuation "comas" MUST NOT detect Comas district
+  assert.equal(
+    detectAllowedDistrict('Escriben alerta sin comas ni puntos sobre robo en Lima Metropolitana.'),
+    'Lima'
+  );
+  assert.equal(detectAllowedDistrict('Texto mal redactado con comas y tildes incorrectas.'), undefined);
+  assert.equal(detectAllowedDistrict('Asalto en Av. Túpac Amaru en Comas, Lima.'), 'Comas');
+
+  const requestedQueries: string[] = [];
+  let fetchBatch = 0;
+  const mockFetch: FetchLike = async input => {
+    fetchBatch += 1;
+    const url = new URL(String(input));
+    requestedQueries.push(url.searchParams.get('query') || '');
+
+    if (fetchBatch === 1) {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          data: [
+            {
+              // 1. Valid Comas + Avenida post -> accepted
+              id: '400000000001',
+              text: 'Reportan asalto en Av. Túpac Amaru, distrito de Comas, Lima.',
+              created_at: '2026-11-19T16:00:00.000Z',
+              lang: 'es'
+            },
+            {
+              // 2. Post in Comas WITHOUT any street/avenue location ref -> discarded when 'avenida' filter is active
+              id: '400000000002',
+              text: 'Hubo un asalto preocupante en Comas, Lima Metropolitana esta tarde.',
+              created_at: '2026-11-19T16:05:00.000Z',
+              lang: 'es'
+            },
+            {
+              // 3. Banking false positive mentioning "extorsión" bancaria -> discarded
+              id: '400000000003',
+              text: 'Alerta de extorsión bancaria y estafa con trámites de documentos en banco de Av. Larco, Miraflores, Lima.',
+              created_at: '2026-11-19T16:10:00.000Z',
+              lang: 'es'
+            },
+            {
+              // 4. Punctuation "comas" -> NOT detected as Comas (detected as Lima -> filtered out if only Comas selected, or detected Lima)
+              id: '400000000004',
+              text: 'Denuncia ciudadana redactada sin comas sobre asalto en Av. Abancay, Lima.',
+              created_at: '2026-11-19T16:15:00.000Z',
+              lang: 'es'
+            }
+          ],
+          meta: { result_count: 4 }
+        })
+      };
+    }
+
+    // Subsequent sequential batches return empty or overlapping IDs
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        data: [],
+        meta: { result_count: 0 }
+      })
+    };
+  };
+
+  const { baseUrl, close } = await startTestServer(mockFetch);
+
+  try {
+    const modToken = issueSessionToken({
+      uid: 'mod-visual-1',
+      name: 'Moderador Visual',
+      email: 'moderacion@vigila.pe',
+      role: 'moderator'
+    });
+
+    // Save structured filters via PUT /api/social/config and ensure additionalKeywords > 80 chars is rejected
+    const tooLongAdd = await fetch(`${baseUrl}/api/social/config`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${modToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        additionalKeywords: 'x'.repeat(85)
+      })
+    });
+    assert.equal(tooLongAdd.status, 400);
+
+    // Save structured filters (Asalto + Avenida + Comas) and verify repeated PUTs don't compound final query
+    const saveCfg1 = await fetch(`${baseUrl}/api/social/config`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${modToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filterIncidentTypes: ['asalto'],
+        filterLocationRefs: ['avenida'],
+        filterDistricts: ['Comas'],
+        additionalKeywords: 'motocicleta'
+      })
+    });
+    assert.equal(saveCfg1.status, 200);
+    const cfg1Json = (await saveCfg1.json()) as {
+      config: { searchQuery: string; queryGroups: string[] };
+    };
+    const saveCfg2 = await fetch(`${baseUrl}/api/social/config`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${modToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        filterDistricts: ['Comas']
+      })
+    });
+    const cfg2Json = (await saveCfg2.json()) as {
+      config: { searchQuery: string; queryGroups: string[] };
+    };
+    assert.equal(cfg1Json.config.searchQuery, cfg2Json.config.searchQuery);
+
+    // Sync with Avenida location ref active & districts=['Comas', 'Lima']
+    const syncRes = await fetch(`${baseUrl}/api/social/x/sync`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${modToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        incidentTypes: ['asalto', 'extorsion'],
+        locationReferences: ['avenida'],
+        districts: ['Comas', 'Lima'],
+        additionalKeywords: ''
+      })
+    });
+    assert.equal(syncRes.status, 200);
+    const syncJson = (await syncRes.json()) as {
+      result: {
+        importedCount: number;
+        discardedCount: number;
+        importedPosts: Array<{ externalPostId: string; detectedDistrict: string }>;
+        discardedPosts: Array<{ externalPostId: string; reviewReason?: string }>;
+      };
+    };
+
+    assert.equal(syncJson.result.importedCount, 2); // #1 (Comas + Av) & #4 (Lima + Av, NOT misclassified as Comas)
+    assert.equal(syncJson.result.discardedCount, 2); // #2 (missing avenida ref) & #3 (banking false positive)
+
+    const punctuationLimaPost = syncJson.result.importedPosts.find(
+      p => p.externalPostId === '400000000004'
+    );
+    assert.equal(punctuationLimaPost?.detectedDistrict, 'Lima');
+
+    const missingRefDiscarded = syncJson.result.discardedPosts.find(
+      p => p.externalPostId === '400000000002'
+    );
+    assert.ok(missingRefDiscarded?.reviewReason?.includes('Sin referencia de ubicación'));
+
+    const bankingDiscarded = syncJson.result.discardedPosts.find(
+      p => p.externalPostId === '400000000003'
+    );
+    assert.ok(bankingDiscarded?.reviewReason?.includes('administrativo o bancario'));
+
+    // Also test sequential sync across ALL 29 districts executes multiple query groups within <= 10 global cap
+    requestedQueries.length = 0;
+    const syncAll29Res = await fetch(`${baseUrl}/api/social/x/sync`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${modToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        incidentTypes: ['robo', 'asalto'],
+        locationReferences: ['avenida', 'calle'],
+        districts: [...ALLOWED_SOCIAL_DISTRICTS]
+      })
+    });
+    assert.equal(syncAll29Res.status, 200);
+    assert.ok(requestedQueries.length >= 2);
+  } finally {
+    if (originalToken === undefined) delete process.env.X_BEARER_TOKEN;
+    else process.env.X_BEARER_TOKEN = originalToken;
+    if (originalCooldown === undefined) delete process.env.X_SYNC_COOLDOWN_MINUTES;
+    else process.env.X_SYNC_COOLDOWN_MINUTES = originalCooldown;
+    await close();
+  }
+});
+
