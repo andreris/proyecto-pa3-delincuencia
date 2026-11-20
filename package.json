@@ -9,7 +9,7 @@
     "dev:all": "concurrently -n WEB,API -c cyan,green \"npm run dev\" \"npm run dev:server\"",
     "build": "vite build",
     "build:server": "tsc -p server/tsconfig.json",
-    "start:server": "node server/dist/index.js",
+    "start:server": "node server/dist/src/index.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server/dist server.js",
     "lint": "tsc --noEmit",

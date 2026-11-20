@@ -280,3 +280,31 @@ test('Creación de IncidentReport desde SocialPost requiere confirmación humana
     await close();
   }
 });
+
+test('Sirve dist/index.html para rutas SPA sin interceptar rutas /api', async () => {
+  const { baseUrl, close } = await startTestServer();
+
+  try {
+    // /api/health always responds JSON and is never intercepted by static/SPA
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthRes.status, 200);
+    assert.ok((healthRes.headers.get('content-type') || '').includes('application/json'));
+    const healthJson = (await healthRes.json()) as { ok: boolean; service: string };
+    assert.equal(healthJson.ok, true);
+    assert.equal(healthJson.service, 'vigila-pe-api');
+
+    // Unknown /api/* routes return JSON 404 instead of index.html
+    const api404Res = await fetch(`${baseUrl}/api/ruta-inexistente`);
+    assert.equal(api404Res.status, 404);
+    assert.ok((api404Res.headers.get('content-type') || '').includes('application/json'));
+
+    // Non-/api route serves dist/index.html when dist build exists
+    const spaRes = await fetch(`${baseUrl}/moderacion/fuentes-sociales`);
+    assert.equal(spaRes.status, 200);
+    assert.ok((spaRes.headers.get('content-type') || '').includes('text/html'));
+    const html = await spaRes.text();
+    assert.ok(html.includes('<div id="root"></div>'));
+  } finally {
+    await close();
+  }
+});

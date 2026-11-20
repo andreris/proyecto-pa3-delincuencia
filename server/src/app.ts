@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseAdapter } from './db/types.js';
 import { issueSessionToken } from './middleware/auth.js';
 import { createIncidentRouter } from './routes/incidentRoutes.js';
@@ -108,6 +111,43 @@ export function createApp({ db, xService }: AppDependencies) {
 
   app.use('/api/incidents', createIncidentRouter(db));
   app.use('/api/social', createSocialRouter(db, resolvedXService));
+
+  // Ensure unknown /api routes return JSON 404 instead of SPA fallback
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Ruta API no encontrada.' });
+  });
+
+  // Serve Vite production frontend build (dist/) after all /api routes
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const distCandidates = [
+    path.resolve(__dirname, '../../dist'),
+    path.resolve(__dirname, '../../../dist'),
+    path.resolve(process.cwd(), 'dist')
+  ];
+  const distDir =
+    distCandidates.find(candidate => fs.existsSync(path.join(candidate, 'index.html'))) ||
+    distCandidates[2];
+
+  if (fs.existsSync(distDir)) {
+    app.use(express.static(distDir));
+  }
+
+  // React SPA routing fallback for any route not starting with /api
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      next();
+      return;
+    }
+
+    const indexPath = path.join(distDir, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      next();
+      return;
+    }
+
+    res.sendFile(indexPath);
+  });
 
   return app;
 }

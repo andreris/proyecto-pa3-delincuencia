@@ -13,6 +13,7 @@ export const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
 export interface BackendHealth {
   ok: boolean;
+  service?: string;
   mode: 'live' | 'demo_no_token';
   xConfigured: boolean;
   dbType: 'sqlite' | 'postgres';
@@ -40,23 +41,25 @@ let activeSessionToken: string | null = null;
 let activeSessionUserKey: string | null = null;
 
 function buildUrl(path: string): string {
-  if (!API_BASE_URL) return '';
-  return `${API_BASE_URL}${path}`;
+  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
 }
 
 export function isBackendConfigured(): boolean {
-  return Boolean(API_BASE_URL);
+  return true;
 }
 
 export async function checkBackendHealth(): Promise<BackendHealth | null> {
-  if (!API_BASE_URL) return null;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(buildUrl('/api/health'), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return null;
-    return (await res.json()) as BackendHealth;
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) return null;
+    const data = (await res.json()) as Partial<BackendHealth>;
+    if (!data.ok || data.service !== 'vigila-pe-api') return null;
+    return data as BackendHealth;
   } catch {
     return null;
   }
