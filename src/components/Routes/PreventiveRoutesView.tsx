@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export const PreventiveRoutesView: React.FC = () => {
-  const { incidents } = useIncidents();
+  const { publicIncidents } = useIncidents();
   const [selectedRoute, setSelectedRoute] = useState<PreventiveRoute>(DEMO_PREVENTIVE_ROUTES[0]);
   const [activeTab, setActiveTab] = useState<'main' | 'alt'>('main');
 
@@ -201,7 +201,7 @@ export const PreventiveRoutesView: React.FC = () => {
         </div>
 
         <LeafletMap
-          incidents={incidents}
+          incidents={publicIncidents}
           selectedIncident={null}
           activeRoute={selectedRoute}
           showRiskZones={true}

@@ -1,0 +1,98 @@
+export type IncidentCategory =
+  | 'robo'
+  | 'extorsion'
+  | 'asalto'
+  | 'accidente'
+  | 'actividad_sospechosa'
+  | 'hurto_menor'
+  | 'otro';
+
+export type RiskLevel = 'alto' | 'medio' | 'informativo';
+
+export type ReportStatus = 'Pendiente de validación' | 'Verificado' | 'Descartado';
+
+export type SocialPostStatus = 'Pendiente de validación' | 'Verificado' | 'Descartado';
+
+export interface IncidentReportRecord {
+  id: string;
+  category: IncidentCategory;
+  riskLevel: RiskLevel;
+  title: string;
+  description: string;
+  date: string;
+  time: string;
+  district: string;
+  approxLocation: {
+    lat: number;
+    lng: number;
+    address: string;
+  };
+  status: ReportStatus;
+  isDemo: boolean;
+  evidenceNote?: string;
+  falseReportFlags: number;
+  helpfulCount: number;
+  reportedByRole: 'Peatón' | 'Conductor' | 'Comerciante' | 'Ciudadano';
+  source: 'citizen' | 'x';
+  sourceUrl?: string;
+  createdAt: string;
+}
+
+export interface SocialPostRecord {
+  id: string;
+  platform: 'x';
+  externalPostId: string;
+  postUrl: string;
+  text: string;
+  publishedAt: string;
+  importedAt: string;
+  queryUsed: string;
+  status: SocialPostStatus;
+  suggestedCategory: IncidentCategory;
+  suggestedRiskLevel: RiskLevel;
+  suggestedDistrict?: string;
+  moderatorId?: string;
+  moderatorName?: string;
+  reviewReason?: string;
+  reviewedAt?: string;
+  linkedIncidentId?: string;
+}
+
+export interface SocialSourceConfig {
+  id: string;
+  searchQuery: string;
+  retentionDays: number;
+  lastSyncAt?: string;
+  lastSyncStatus?: 'success' | 'error' | 'idle';
+  lastSyncMessage?: string;
+  lastImportedCount: number;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface SocialSourceAuditRecord {
+  id: string;
+  actionType:
+    | 'x_sync'
+    | 'social_post_approved'
+    | 'social_post_linked'
+    | 'social_post_discarded'
+    | 'social_query_updated'
+    | 'incident_verified'
+    | 'incident_discarded'
+    | 'retention_cleanup';
+  actorId: string;
+  actorName: string;
+  actorRole: string;
+  targetType: 'social_post' | 'incident' | 'social_config' | 'system';
+  targetId?: string;
+  details: string;
+  createdAt: string;
+}
+
+export interface AuthenticatedUser {
+  uid: string;
+  name: string;
+  email: string;
+  role: 'user' | 'moderator';
+}

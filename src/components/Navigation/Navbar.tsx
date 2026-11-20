@@ -32,7 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSosModal
 }) => {
   const { currentUser, logout, switchUserPersona, isModerator } = useAuth();
-  const { incidents } = useIncidents();
+  const { incidents, isDemoMode } = useIncidents();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
 
@@ -55,6 +55,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         </div>
         <div className="hidden sm:flex items-center gap-3 text-slate-400">
+          {isDemoMode && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 border border-amber-400/40 text-[10px] font-bold">
+              Modo demo
+            </span>
+          )}
           <span className="flex items-center gap-1">
             <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
             Red Activa: Lima & Callao

@@ -1,29 +1,56 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useIncidents } from '../../context/IncidentContext';
 import { useAuth } from '../../context/AuthContext';
 import { IncidentReport } from '../../types';
+import { SocialSourcesTab } from './SocialSourcesTab';
+import { fetchBackendIncidents, reviewBackendIncident } from '../../services/apiClient';
+import { getSafeExternalUrl, sanitizeExternalText } from '../../utils/sanitize';
 import {
-  ShieldCheck,
   CheckCircle,
   XCircle,
   AlertTriangle,
   BarChart3,
   MapPin,
   Clock,
-  Filter,
   History,
   Lock,
-  ThumbsUp,
-  FileCheck
+  FileCheck,
+  Radio,
+  ExternalLink
 } from 'lucide-react';
 
 export const ModerationPanel: React.FC = () => {
-  const { incidents, verifyIncident, discardIncident, moderationLogs, resetDemoData } = useIncidents();
+  const {
+    incidents,
+    verifyIncident,
+    discardIncident,
+    upsertIncident,
+    moderationLogs,
+    resetDemoData,
+    backendAvailable,
+    isDemoMode
+  } = useIncidents();
   const { currentUser, isModerator, switchUserPersona } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'pending' | 'stats' | 'logs'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'stats' | 'logs'>('pending');
   const [filterDistrict, setFilterDistrict] = useState<string>('all');
   const [reasonInput, setReasonInput] = useState<{ [id: string]: string }>({});
+
+  useEffect(() => {
+    if (!backendAvailable || !isModerator) return;
+    let cancelled = false;
+    fetchBackendIncidents(currentUser, true)
+      .then(serverIncidents => {
+        if (cancelled) return;
+        serverIncidents.forEach(item => upsertIncident(item));
+      })
+      .catch(() => {
+        // Fallback silently to local state
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backendAvailable, isModerator, currentUser?.uid, currentUser?.role]);
 
   const pendingReports = incidents.filter(
     i => i.status === 'Pendiente de validación' && (filterDistrict === 'all' || i.district === filterDistrict)
@@ -50,11 +77,17 @@ export const ModerationPanel: React.FC = () => {
 
   const handleVerify = (report: IncidentReport) => {
     verifyIncident(report.id, currentUser?.name || 'Moderador Comunitario');
+    if (backendAvailable && isModerator) {
+      reviewBackendIncident(currentUser, report.id, 'Verificado').catch(() => {});
+    }
   };
 
   const handleDiscard = (report: IncidentReport) => {
     const reason = reasonInput[report.id] || 'Información no verificable o fuera de zona';
     discardIncident(report.id, currentUser?.name || 'Moderador Comunitario', reason);
+    if (backendAvailable && isModerator) {
+      reviewBackendIncident(currentUser, report.id, 'Descartado', reason).catch(() => {});
+    }
   };
 
   return (
@@ -63,13 +96,19 @@ export const ModerationPanel: React.FC = () => {
         {/* Header card with Role Gate notice */}
         <div className="bg-[#0B1F3A] text-white p-6 sm:p-8 rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300 bg-amber-950/80 px-3 py-0.5 rounded-full border border-amber-800">
                 Panel Oficial de Moderación
               </span>
               {isModerator && (
                 <span className="text-[11px] font-semibold text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-full border border-emerald-800">
                   Acceso concedido
+                </span>
+              )}
+              {isDemoMode && (
+                <span className="text-[11px] font-bold text-amber-200 bg-amber-900/60 px-2.5 py-0.5 rounded-full border border-amber-700 inline-flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3 text-amber-300" />
+                  Modo demo
                 </span>
               )}
             </div>
@@ -130,7 +169,7 @@ export const ModerationPanel: React.FC = () => {
         </div>
 
         {/* Tab navigation */}
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
           <button
             onClick={() => setActiveTab('pending')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
@@ -141,6 +180,18 @@ export const ModerationPanel: React.FC = () => {
           >
             <Clock className="w-4 h-4" />
             Cola de Validación ({pendingReports.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('social')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'social'
+                ? 'bg-[#0B1F3A] text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Radio className="w-4 h-4" />
+            Fuentes sociales
           </button>
 
           <button
@@ -186,10 +237,15 @@ export const ModerationPanel: React.FC = () => {
                   className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
                 >
                   <div className="space-y-1.5 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
                         {report.category.replace('_', ' ')}
                       </span>
+                      {report.source === 'x' && (
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-900 text-white">
+                          Fuente externa: X (no visible hasta verificar)
+                        </span>
+                      )}
                       <span className="text-[10px] font-semibold text-slate-500">
                         Folio: {report.id}
                       </span>
@@ -198,8 +254,12 @@ export const ModerationPanel: React.FC = () => {
                       </span>
                     </div>
 
-                    <h3 className="font-bold text-sm text-slate-900">{report.title}</h3>
-                    <p className="text-xs text-slate-600 leading-relaxed">{report.description}</p>
+                    <h3 className="font-bold text-sm text-slate-900">
+                      {sanitizeExternalText(report.title, 140)}
+                    </h3>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {sanitizeExternalText(report.description, 450)}
+                    </p>
 
                     <div className="pt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
                       <span className="flex items-center gap-1 font-semibold text-blue-700">
@@ -208,8 +268,19 @@ export const ModerationPanel: React.FC = () => {
                       </span>
                       {report.evidenceNote && (
                         <span className="text-[11px] text-slate-500 italic bg-slate-50 px-2 py-0.5 rounded">
-                          Referencia: {report.evidenceNote}
+                          Referencia: {sanitizeExternalText(report.evidenceNote, 200)}
                         </span>
+                      )}
+                      {report.sourceUrl && getSafeExternalUrl(report.sourceUrl) && (
+                        <a
+                          href={getSafeExternalUrl(report.sourceUrl) || undefined}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-600 hover:underline"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Ver publicación original
+                        </a>
                       )}
                     </div>
                   </div>
@@ -237,6 +308,9 @@ export const ModerationPanel: React.FC = () => {
             )}
           </div>
         )}
+
+        {/* TAB 2: SOCIAL SOURCES (X API v2) */}
+        {activeTab === 'social' && <SocialSourcesTab />}
 
         {/* TAB 2: STATISTICS */}
         {activeTab === 'stats' && (

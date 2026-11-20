@@ -31,7 +31,72 @@ export interface IncidentReport {
   falseReportFlags: number;
   helpfulCount: number;
   reportedByRole: 'Peatón' | 'Conductor' | 'Comerciante' | 'Ciudadano';
+  source?: 'citizen' | 'x';
+  sourceUrl?: string;
   createdAt: string;
+}
+
+export type SocialPostStatus = 'Pendiente de validación' | 'Verificado' | 'Descartado';
+
+export interface SocialPost {
+  id: string;
+  platform: 'x';
+  externalPostId: string;
+  postUrl: string;
+  text: string;
+  publishedAt: string;
+  importedAt: string;
+  authorUsername?: string;
+  queryUsed: string;
+  status: SocialPostStatus;
+  suggestedCategory: IncidentCategory;
+  suggestedRiskLevel: RiskLevel;
+  suggestedDistrict?: string;
+  moderatorId?: string;
+  moderatorName?: string;
+  reviewReason?: string;
+  reviewedAt?: string;
+  linkedIncidentId?: string;
+  isDemo?: boolean;
+}
+
+export interface SocialSourceAudit {
+  id: string;
+  actionType:
+    | 'x_sync'
+    | 'social_post_approved'
+    | 'social_post_linked'
+    | 'social_post_discarded'
+    | 'social_query_updated'
+    | 'incident_verified'
+    | 'incident_discarded'
+    | 'retention_cleanup';
+  actorId: string;
+  actorName: string;
+  actorRole: string;
+  targetType: 'social_post' | 'incident' | 'social_config' | 'system';
+  targetId?: string;
+  details: string;
+  createdAt: string;
+}
+
+export interface SocialSyncStatus {
+  backendAvailable: boolean;
+  xConfigured: boolean;
+  isDemoMode: boolean;
+  isSyncing: boolean;
+  searchQuery: string;
+  retentionDays: number;
+  lastSyncAt?: string;
+  lastSyncStatus?: 'success' | 'error' | 'idle';
+  lastSyncMessage?: string;
+  lastImportedCount: number;
+  stats: {
+    total: number;
+    pending: number;
+    verified: number;
+    discarded: number;
+  };
 }
 
 export type UserType = 'peaton' | 'conductor' | 'comerciante';

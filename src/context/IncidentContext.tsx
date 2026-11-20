@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { IncidentReport, TrustedContact, IncidentCategory, RiskLevel, ReportStatus, ModerationLog } from '../types';
+import { IncidentReport, TrustedContact, ReportStatus, ModerationLog } from '../types';
 import { DEMO_INCIDENTS, DEMO_TRUSTED_CONTACTS } from '../data/demoData';
+import { checkBackendHealth, fetchBackendIncidents, isBackendConfigured } from '../services/apiClient';
 
 interface FilterState {
   category: string;
@@ -13,6 +14,7 @@ interface FilterState {
 
 interface IncidentContextType {
   incidents: IncidentReport[];
+  publicIncidents: IncidentReport[];
   filteredIncidents: IncidentReport[];
   filters: FilterState;
   setFilters: React.Dispatch<React.SetStateAction<FilterState>>;
@@ -24,6 +26,7 @@ interface IncidentContextType {
   mapZoom: number;
   setMapZoom: (zoom: number) => void;
   addIncident: (data: Omit<IncidentReport, 'id' | 'status' | 'falseReportFlags' | 'helpfulCount' | 'createdAt'>) => string;
+  upsertIncident: (report: IncidentReport) => void;
   verifyIncident: (id: string, moderatorName: string) => void;
   discardIncident: (id: string, moderatorName: string, reason?: string) => void;
   flagSpamOrFalseReport: (id: string) => void;
@@ -38,6 +41,9 @@ interface IncidentContextType {
   activateSos: (lat: number, lng: number) => void;
   clearSos: () => void;
   resetDemoData: () => void;
+  backendAvailable: boolean;
+  xConfigured: boolean;
+  isDemoMode: boolean;
 }
 
 const DEFAULT_FILTERS: FilterState = {
@@ -79,6 +85,9 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const [backendAvailable, setBackendAvailable] = useState<boolean>(false);
+  const [xConfigured, setXConfigured] = useState<boolean>(false);
+
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [selectedIncident, setSelectedIncident] = useState<IncidentReport | null>(null);
   
@@ -100,6 +109,45 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     localStorage.setItem('vigila_pe_mod_logs', JSON.stringify(moderationLogs));
   }, [moderationLogs]);
+
+  // Probe optional Express backend on startup (safe fallback to Modo demo if unavailable)
+  useEffect(() => {
+    if (!isBackendConfigured()) {
+      setBackendAvailable(false);
+      setXConfigured(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const health = await checkBackendHealth();
+      if (cancelled || !health?.ok) {
+        setBackendAvailable(false);
+        setXConfigured(false);
+        return;
+      }
+
+      setBackendAvailable(true);
+      setXConfigured(Boolean(health.xConfigured));
+
+      try {
+        const serverIncidents = await fetchBackendIncidents(null, false);
+        if (!cancelled && serverIncidents.length > 0) {
+          setIncidents(prev => {
+            const existingIds = new Set(prev.map(i => i.id));
+            const fresh = serverIncidents.filter(i => !existingIds.has(i.id));
+            return fresh.length > 0 ? [...fresh, ...prev] : prev;
+          });
+        }
+      } catch {
+        // Keep demo incidents if fetch fails
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const resetFilters = () => {
     setFilters(DEFAULT_FILTERS);
@@ -125,11 +173,22 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       status: 'Pendiente de validación',
       falseReportFlags: 0,
       helpfulCount: 1,
+      source: data.source || 'citizen',
       createdAt: new Date().toISOString()
     };
 
     setIncidents(prev => [newReport, ...prev]);
     return id;
+  };
+
+  const upsertIncident = (report: IncidentReport) => {
+    setIncidents(prev => {
+      const exists = prev.some(i => i.id === report.id);
+      if (exists) {
+        return prev.map(i => (i.id === report.id ? report : i));
+      }
+      return [report, ...prev];
+    });
   };
 
   const verifyIncident = (id: string, moderatorName: string) => {
@@ -237,8 +296,13 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     localStorage.removeItem('vigila_pe_mod_logs');
   };
 
-  // Filter computation
-  const filteredIncidents = incidents.filter(item => {
+  // Publicly visible incidents (strictly excludes discarded items and unverified X-sourced reports)
+  const publicIncidents = incidents.filter(
+    item => item.status !== 'Descartado' && (item.source !== 'x' || item.status === 'Verificado')
+  );
+
+  // Filter computation (strictly excludes discarded items and unverified X-sourced reports from public map/feed)
+  const filteredIncidents = publicIncidents.filter(item => {
     if (filters.category !== 'all' && item.category !== filters.category) return false;
     if (filters.district !== 'all' && !item.district.toLowerCase().includes(filters.district.toLowerCase()) && filters.district !== 'Todos los distritos') {
       return false;
@@ -260,10 +324,13 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return true;
   });
 
+  const isDemoMode = !backendAvailable || !xConfigured;
+
   return (
     <IncidentContext.Provider
       value={{
         incidents,
+        publicIncidents,
         filteredIncidents,
         filters,
         setFilters,
@@ -275,6 +342,7 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         mapZoom,
         setMapZoom,
         addIncident,
+        upsertIncident,
         verifyIncident,
         discardIncident,
         flagSpamOrFalseReport,
@@ -288,7 +356,10 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         lastSosData,
         activateSos,
         clearSos,
-        resetDemoData
+        resetDemoData,
+        backendAvailable,
+        xConfigured,
+        isDemoMode
       }}
     >
       {children}

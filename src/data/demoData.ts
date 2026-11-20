@@ -1,4 +1,4 @@
-import { IncidentReport, PreventiveRoute, TrustedContact } from '../types';
+import { IncidentReport, PreventiveRoute, SocialPost, TrustedContact } from '../types';
 
 export const DEMO_INCIDENTS: IncidentReport[] = [
   {
@@ -427,5 +427,70 @@ export const EMERGENCY_SERVICES = [
     phone: '100',
     description: 'Orientación y auxilio ante violencia familiar y de género',
     color: 'bg-purple-800 text-white'
+  }
+];
+
+export const DISTRICT_APPROX_COORDS: Record<string, { lat: number; lng: number }> = {
+  'Lima (Cercado)': { lat: -12.0464, lng: -77.0428 },
+  Comas: { lat: -11.9352, lng: -77.0541 },
+  'San Juan de Lurigancho': { lat: -11.9865, lng: -77.0042 },
+  'Santiago de Surco': { lat: -12.1384, lng: -76.9892 },
+  Miraflores: { lat: -12.1215, lng: -77.0302 },
+  Callao: { lat: -12.0435, lng: -77.1189 },
+  'Los Olivos': { lat: -11.9922, lng: -77.0705 },
+  'San Isidro': { lat: -12.0965, lng: -77.0275 },
+  Ate: { lat: -12.0268, lng: -76.9187 },
+  'San Martín de Porres': { lat: -12.0086, lng: -77.0688 },
+  'Villa El Salvador': { lat: -12.2125, lng: -76.9394 },
+  'San Borja': { lat: -12.0942, lng: -76.9996 },
+  'La Victoria': { lat: -12.0672, lng: -77.0186 },
+  Independencia: { lat: -11.9904, lng: -77.0542 }
+};
+
+export const DEMO_SOCIAL_POSTS: SocialPost[] = [
+  {
+    id: 'SOC-DEMO-01',
+    platform: 'x',
+    externalPostId: 'demo-x-189001',
+    postUrl: 'https://x.com/i/web/status/189001',
+    text: '[Datos de demostración] Vecinos reportan asalto al paso en paradero cercano al óvalo en Los Olivos. Recomiendan esperar transporte en zona iluminada.',
+    publishedAt: '2026-11-19T15:20:00Z',
+    importedAt: '2026-11-19T15:25:00Z',
+    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    status: 'Pendiente de validación',
+    suggestedCategory: 'asalto',
+    suggestedRiskLevel: 'alto',
+    suggestedDistrict: 'Los Olivos',
+    isDemo: true
+  },
+  {
+    id: 'SOC-DEMO-02',
+    platform: 'x',
+    externalPostId: 'demo-x-189002',
+    postUrl: 'https://x.com/i/web/status/189002',
+    text: '[Datos de demostración] Congestión vehicular fuerte por accidente leve en cruce principal del Callao. Unidades de auxilio ya en camino.',
+    publishedAt: '2026-11-19T14:10:00Z',
+    importedAt: '2026-11-19T14:15:00Z',
+    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    status: 'Pendiente de validación',
+    suggestedCategory: 'accidente',
+    suggestedRiskLevel: 'medio',
+    suggestedDistrict: 'Callao',
+    isDemo: true
+  },
+  {
+    id: 'SOC-DEMO-03',
+    platform: 'x',
+    externalPostId: 'demo-x-189003',
+    postUrl: 'https://x.com/i/web/status/189003',
+    text: '[Datos de demostración] Comerciantes alertan sobre mensajes de extorsión en zona comercial de San Juan de Lurigancho. Piden mayor patrullaje preventivo.',
+    publishedAt: '2026-11-19T11:45:00Z',
+    importedAt: '2026-11-19T11:50:00Z',
+    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    status: 'Pendiente de validación',
+    suggestedCategory: 'extorsion',
+    suggestedRiskLevel: 'alto',
+    suggestedDistrict: 'San Juan de Lurigancho',
+    isDemo: true
   }
 ];

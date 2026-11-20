@@ -15,8 +15,10 @@ import {
   Share2,
   Lock,
   Eye,
-  AlertCircle
+  AlertCircle,
+  ExternalLink
 } from 'lucide-react';
+import { getSafeExternalUrl, sanitizeExternalText } from '../../utils/sanitize';
 
 interface IncidentDetailModalProps {
   incident: IncidentReport | null;
@@ -106,7 +108,7 @@ export const IncidentDetailModal: React.FC<IncidentDetailModalProps> = ({
               Descripción del incidente
             </h4>
             <p className="text-xs sm:text-sm text-slate-800 bg-slate-50 p-3.5 rounded-2xl border border-slate-200 leading-relaxed">
-              {incident.description}
+              {sanitizeExternalText(incident.description, 500)}
             </p>
           </div>
 
@@ -137,12 +139,32 @@ export const IncidentDetailModal: React.FC<IncidentDetailModalProps> = ({
           </div>
 
           {/* Evidence or notes */}
-          {incident.evidenceNote && (
-            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs">
-              <span className="text-[10px] text-slate-400 font-bold uppercase block mb-1">
-                Referencia comunitaria
-              </span>
-              <p className="text-slate-700 italic">{incident.evidenceNote}</p>
+          {(incident.evidenceNote || incident.source === 'x') && (
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase">
+                  Referencia comunitaria
+                </span>
+                {incident.source === 'x' && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-900 text-white">
+                    Fuente externa: X
+                  </span>
+                )}
+              </div>
+              {incident.evidenceNote && (
+                <p className="text-slate-700 italic">{sanitizeExternalText(incident.evidenceNote, 260)}</p>
+              )}
+              {incident.source === 'x' && getSafeExternalUrl(incident.sourceUrl) && (
+                <a
+                  href={getSafeExternalUrl(incident.sourceUrl)!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 underline"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Ver publicación original
+                </a>
+              )}
             </div>
           )}
 

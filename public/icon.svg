@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1F3A"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="flag-red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#DC2626"/>
+      <stop offset="100%" stop-color="#B91C1C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded squircle -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- Radar circles -->
+  <circle cx="256" cy="240" r="160" fill="none" stroke="#2563EB" stroke-width="4" stroke-opacity="0.25"/>
+  <circle cx="256" cy="240" r="110" fill="none" stroke="#3B82F6" stroke-width="4" stroke-opacity="0.35"/>
+  <circle cx="256" cy="240" r="60" fill="none" stroke="#60A5FA" stroke-width="4" stroke-opacity="0.45"/>
+
+  <!-- Shield Shape -->
+  <path d="M256 90 L380 145 C380 270 256 360 256 360 C256 360 132 270 132 145 Z" 
+        fill="url(#accent)" 
+        stroke="#FFFFFF" 
+        stroke-width="12" 
+        stroke-linejoin="round"/>
+
+  <!-- Inner Peru Flag Stripes or Geo Marker -->
+  <path d="M256 160 C230 160 210 180 210 206 C210 246 256 290 256 290 C256 290 302 246 302 206 C302 180 282 160 256 160 Z" 
+        fill="#FFFFFF"/>
+  <circle cx="256" cy="206" r="18" fill="url(#flag-red)"/>
+
+  <!-- Label Vigila.pe -->
+  <text x="256" y="445" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="44" 
+        font-weight="900" 
+        fill="#FFFFFF" 
+        text-anchor="middle" 
+        letter-spacing="2">VIGILA.PE</text>
+  <text x="256" y="475" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="20" 
+        font-weight="700" 
+        fill="#93C5FD" 
+        text-anchor="middle" 
+        letter-spacing="4">GEOSEGURIDAD</text>
+</svg>
