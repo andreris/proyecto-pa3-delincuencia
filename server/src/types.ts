@@ -38,9 +38,12 @@ export interface IncidentReportRecord {
   createdAt: string;
 }
 
+export type SocialPostState = 'pending_validation' | 'verified' | 'discarded';
+
 export interface SocialPostRecord {
   id: string;
   platform: 'x';
+  source: 'x';
   externalPostId: string;
   postUrl: string;
   text: string;
@@ -48,9 +51,11 @@ export interface SocialPostRecord {
   importedAt: string;
   queryUsed: string;
   status: SocialPostStatus;
+  state: SocialPostState;
   suggestedCategory: IncidentCategory;
   suggestedRiskLevel: RiskLevel;
   suggestedDistrict?: string;
+  detectedDistrict?: string;
   moderatorId?: string;
   moderatorName?: string;
   reviewReason?: string;
@@ -62,6 +67,9 @@ export interface SocialSourceConfig {
   id: string;
   searchQuery: string;
   retentionDays: number;
+  filterDistricts: string[];
+  filterDateFrom?: string;
+  filterDateTo?: string;
   lastSyncAt?: string;
   lastSyncStatus?: 'success' | 'error' | 'idle';
   lastSyncMessage?: string;

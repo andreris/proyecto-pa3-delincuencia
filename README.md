@@ -145,22 +145,35 @@ Vigila.pe permite incorporar publicaciones **públicas** recientes de X como **f
 - **Desarrollo local**: Si `DATABASE_URL` está vacío, el servidor crea automáticamente una base SQLite en `server/data/vigila.db`.
 - **Producción**: Define `DATABASE_URL="postgresql://usuario:password@host:5432/vigila_pe"` en el entorno del servidor para usar PostgreSQL sin cambiar la lógica de negocio.
 
+### Variables de entorno del módulo X y Moderación
+- `X_BEARER_TOKEN`: Bearer Token de lectura de X API v2 (solo en el servidor Express, nunca en `VITE_*` ni cliente).
+- `X_SYNC_MAX_POSTS`: Máximo de publicaciones por sincronización (por defecto `10`, con tope estricto en servidor de `10`).
+- `X_SYNC_COOLDOWN_MINUTES`: Minutos mínimos entre sincronizaciones exitosas (por defecto `60`).
+- `MODERATOR_ACCESS_CODE`: Código de acceso verificado por `POST /api/auth/session` para habilitar el modo moderador.
+- `SOCIAL_RETENTION_DAYS`: Días de retención de publicaciones descartadas antes de depuración automática (por defecto `30`).
+
+### Distritos permitidos y Filtros en “Fuentes sociales”
+- **Cobertura geográfica estricta**: Solo se aceptan publicaciones que identifiquen uno de los distritos permitidos de Lima Metropolitana y Callao: `Lima`, `Callao`, `Comas`, `Los Olivos`, `San Juan de Lurigancho`, `San Martín de Porres`, `Santiago de Surco`, `Villa El Salvador`, `Miraflores`, `Ate` y `Chorrillos`.
+- **Validación automática en backend**: Toda publicación importada se normaliza (mayúsculas, tildes y espacios) y descarta automáticamente si es retuit (`RT @` o `retweeted`), menciona ubicaciones extranjeras o carece de distrito permitido.
+- **Filtros visuales**: El moderador puede seleccionar uno o varios distritos permitidos y un rango de fechas (**Fecha desde** / **Fecha hasta**) antes de aplicar filtros o sincronizar con X. Los filtros activos se muestran como etiquetas y aplican tanto a las publicaciones ya importadas como a la siguiente consulta a X.
+
 ### Limitaciones conocidas de X API v2
-- El endpoint de búsqueda reciente (`/2/tweets/search/recent`) cubre típicamente los últimos **7 días** según el plan de X Developer.
-- Los planes gratuitos/básicos de X tienen límites estrictos de solicitudes y volumen mensual (`rate limits`, código `429`). El backend respeta paginación acotada, evita sincronizaciones concurrentes y deduplica automáticamente por `external_post_id`.
+- El endpoint de búsqueda reciente (`/2/tweets/search/recent`) cubre típicamente los últimos **7 días** según el plan de X Developer. Si se solicita un rango de fechas fuera de esa ventana, X API rechazará la consulta y el panel informará claramente al moderador.
+- Los planes gratuitos/básicos de X tienen límites estrictos de solicitudes y volumen mensual (`rate limits`, código `429`). El backend ejecuta una única consulta sin paginación (`max_results=10`), respeta el cooldown de `X_SYNC_COOLDOWN_MINUTES` y deduplica automáticamente por `external_post_id`.
 
 ### Flujo de Moderación Humana
-1. Inicia sesión o activa el rol **Moderador** e ingresa a **Moderación → Fuentes sociales**.
-2. Configura (opcionalmente) la consulta de búsqueda oficial (solo moderadores) y presiona **“Sincronizar X”**.
-3. Revisa cada publicación segura: abre el enlace original en X, valida si corresponde a un incidente real y elige:
-   - **Crear reporte desde publicación**: exige confirmar distrito/zona aproximada y crea el incidente con estado **“Pendiente de validación”** (aún oculto en el mapa público).
+1. Inicia sesión o activa el modo **Moderador** ingresando `MODERATOR_ACCESS_CODE` en **Moderación → Fuentes sociales**.
+2. Selecciona los filtros de **distritos** y **rango de fechas**, pulsa **“Aplicar filtros”** y luego **“Sincronizar X”** (máximo 10 publicaciones por ejecución).
+3. Revisa las pestañas **Pendientes**, **Todas** y **Descartadas**:
+   - Cada tarjeta muestra **“Distrito detectado”**, fecha, enlace **“Ver publicación original”** y motivo si fue descartada.
+   - **Crear reporte desde publicación**: permanece deshabilitado si no existe distrito confirmado; exige confirmación geográfica y crea el incidente con estado **“Pendiente de validación”** (aún oculto en el mapa público).
    - **Vincular a reporte existente**: asocia la publicación como respaldo informativo.
    - **Descartar**: registra el descarte en auditoría y aplica retención de 30 días.
 4. En **Cola de Validación**, aprueba (**“Verificado”**) el reporte para que recién sea visible en el mapa público.
 
 ### Verificación y Pruebas
 ```bash
-npm test          # Pruebas de deduplicación, autorización de moderador y flujo SocialPost -> IncidentReport
+npm test          # Pruebas de validación Lima/Callao, filtros, deduplicación, autorización y flujo SocialPost -> IncidentReport
 npm run typecheck # Verificación de tipos TypeScript (frontend + backend)
 npm run build     # Compilación de producción del frontend
 npm run build:server # Compilación TypeScript del backend Express

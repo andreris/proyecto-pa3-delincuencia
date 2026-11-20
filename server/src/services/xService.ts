@@ -1,14 +1,18 @@
 import { DatabaseAdapter } from '../db/types.js';
 import { AuthenticatedUser, SocialPostRecord } from '../types.js';
 import {
+  buildXRecentSearchQuery,
+  sanitizeAllowedDistricts,
   sanitizeExternalText,
   sanitizeXPostUrl,
-  suggestMetadataFromText
+  validateAndClassifyXPost
 } from '../utils/sanitize.js';
 import {
+  EvaluatedSocialPostInput,
   getOrCreateSocialConfig,
   insertSocialPostsDeduped,
-  updateSyncMetadata
+  updateSyncMetadata,
+  validateDateRange
 } from './socialRepository.js';
 import { recordAuditLog } from './auditService.js';
 
@@ -20,6 +24,7 @@ export interface XApiTweet {
   text: string;
   created_at?: string;
   lang?: string;
+  referenced_tweets?: Array<{ type: string; id?: string }>;
 }
 
 export interface XApiRecentSearchResponse {
@@ -43,10 +48,18 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
+export interface SyncFiltersInput {
+  districts?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+}
+
 export interface SyncResult {
   fetchedCount: number;
   importedCount: number;
+  discardedCount: number;
   duplicatesSkipped: number;
+  discardReasons: string[];
   queryUsed: string;
   maxPostsLimit: number;
   cooldownMinutes: number;
@@ -54,6 +67,7 @@ export interface SyncResult {
   rateLimitRemaining?: number;
   rateLimitReset?: string;
   importedPosts: SocialPostRecord[];
+  discardedPosts: SocialPostRecord[];
 }
 
 export class SyncConflictError extends Error {
@@ -85,6 +99,13 @@ export class XCreditsError extends Error {
   ) {
     super(message);
     this.name = 'XCreditsError';
+  }
+}
+
+export class XDateRangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'XDateRangeError';
   }
 }
 
@@ -188,12 +209,13 @@ export class XService {
 
   /**
    * Executes a single low-consumption official X API v2 Recent Search request (no pagination),
-   * strictly capped at max_results=10 and <= 10 posts per sync, with 60-minute cooldown
-   * and deduplication by external_post_id.
+   * strictly capped at max_results=10 and <= 10 posts per sync, with configurable cooldown,
+   * Lima/Callao district filtering, mandatory post-fetch validation, and deduplication.
    */
   public async syncRecentPublicPosts(
     db: DatabaseAdapter,
-    moderator: AuthenticatedUser
+    moderator: AuthenticatedUser,
+    filtersInput?: SyncFiltersInput
   ): Promise<SyncResult> {
     if (this.isSyncing) {
       throw new SyncConflictError();
@@ -225,18 +247,68 @@ export class XService {
       );
     }
 
+    const effectiveDistricts =
+      filtersInput?.districts !== undefined
+        ? sanitizeAllowedDistricts(filtersInput.districts)
+        : config.filterDistricts;
+
+    const rawFrom =
+      filtersInput?.dateFrom !== undefined ? filtersInput.dateFrom : config.filterDateFrom;
+    const rawTo =
+      filtersInput?.dateTo !== undefined ? filtersInput.dateTo : config.filterDateTo;
+
+    let validatedDates: { dateFrom?: string; dateTo?: string };
+    try {
+      validatedDates = validateDateRange(rawFrom, rawTo);
+    } catch (err) {
+      throw new XDateRangeError(
+        err instanceof Error
+          ? err.message.replace(/^BAD_REQUEST:\s*/, '')
+          : 'Rango de fechas inválido.'
+      );
+    }
+
+    const { dateFrom, dateTo } = validatedDates;
+    const startTimeIso = dateFrom ? `${dateFrom}T00:00:00Z` : undefined;
+    let endTimeIso: string | undefined;
+
+    if (dateFrom && new Date(startTimeIso!).getTime() > Date.now() - 15_000) {
+      throw new XDateRangeError(
+        'La fecha desde no puede estar en el futuro para consultar publicaciones recientes en X API v2.'
+      );
+    }
+
+    if (dateTo) {
+      const requestedEndMs = new Date(`${dateTo}T23:59:59Z`).getTime();
+      const maxAllowedEndMs = Date.now() - 15_000;
+      const clampedEndMs = Math.min(requestedEndMs, maxAllowedEndMs);
+      if (startTimeIso && clampedEndMs <= new Date(startTimeIso).getTime()) {
+        throw new XDateRangeError(
+          'El rango de fechas solicitado no es válido para la ventana actual de X API v2.'
+        );
+      }
+      endTimeIso = new Date(clampedEndMs).toISOString();
+    }
+
     this.isSyncing = true;
-    const query = config.searchQuery;
+    const query = buildXRecentSearchQuery(effectiveDistricts, config.searchQuery);
 
     try {
       // Single request only — no pagination, no next_token loop, max_results=10
       const params = new URLSearchParams({
         query,
         max_results: String(HARD_MAX_POSTS_PER_SYNC),
-        // Privacy-minimal fields: public post text & timestamp only.
+        // Privacy-minimal fields: public post text, timestamp & retweet ref only.
         // No user profile expansion, no followers, no private messages, no geo.
-        'tweet.fields': 'created_at,lang'
+        'tweet.fields': 'created_at,lang,referenced_tweets'
       });
+
+      if (startTimeIso) {
+        params.set('start_time', startTimeIso);
+      }
+      if (endTimeIso) {
+        params.set('end_time', endTimeIso);
+      }
 
       const endpoint = `${this.apiBaseUrl}/tweets/search/recent?${params.toString()}`;
       const response = await this.fetchImpl(endpoint, {
@@ -284,6 +356,11 @@ export class XService {
             'Créditos o cuota de X API agotados. Puedes seguir operando con Modo demo.'
           );
         }
+        if (response.status === 400 && /start_time|end_time|7 days|date|time/i.test(detail)) {
+          throw new XDateRangeError(
+            `X API v2 no acepta el rango de fechas solicitado (la búsqueda reciente suele limitarse a los últimos 7 días): ${detail}`
+          );
+        }
         throw new Error(`Error al consultar X API v2: ${detail}`);
       }
 
@@ -293,28 +370,51 @@ export class XService {
         .filter(t => t && typeof t.id === 'string' && typeof t.text === 'string')
         .slice(0, maxPostsLimit);
 
-      const normalizedPosts = cappedTweets.map(tweet => {
+      const evaluatedPosts: EvaluatedSocialPostInput[] = cappedTweets.map(tweet => {
         const safeText = sanitizeExternalText(tweet.text, 500);
-        const meta = suggestMetadataFromText(safeText);
+        const publishedAt = tweet.created_at || new Date().toISOString();
+        const outcome = validateAndClassifyXPost({
+          text: tweet.text,
+          publishedAt,
+          referencedTweets: tweet.referenced_tweets,
+          selectedDistricts: effectiveDistricts,
+          dateFrom,
+          dateTo
+        });
+
         return {
           platform: 'x' as const,
           externalPostId: tweet.id,
           postUrl: sanitizeXPostUrl(`https://x.com/i/web/status/${tweet.id}`, tweet.id),
           text: safeText,
-          publishedAt: tweet.created_at || new Date().toISOString(),
+          publishedAt,
           queryUsed: query,
-          suggestedCategory: meta.suggestedCategory,
-          suggestedRiskLevel: meta.suggestedRiskLevel,
-          suggestedDistrict: meta.suggestedDistrict
+          suggestedCategory: outcome.suggestedCategory,
+          suggestedRiskLevel: outcome.suggestedRiskLevel,
+          suggestedDistrict: outcome.detectedDistrict,
+          status: outcome.accepted ? 'Pendiente de validación' : 'Descartado',
+          reviewReason: outcome.discardReason
         };
       });
 
-      const { imported, duplicatesSkipped } = await insertSocialPostsDeduped(db, normalizedPosts);
+      const { imported, discarded, duplicatesSkipped } = await insertSocialPostsDeduped(
+        db,
+        evaluatedPosts
+      );
+
+      const discardReasons = Array.from(
+        new Set(
+          discarded
+            .map(d => d.reviewReason)
+            .filter((r): r is string => Boolean(r))
+        )
+      );
+
       const syncTimestamp = new Date().toISOString();
       const nextAllowedSyncAt = new Date(
         new Date(syncTimestamp).getTime() + cooldownState.cooldownMinutes * 60 * 1000
       ).toISOString();
-      const message = `Sincronización completada: ${imported.length} nuevas publicaciones (máx. ${maxPostsLimit}), ${duplicatesSkipped} duplicadas omitidas.`;
+      const message = `Sincronización completada: ${cappedTweets.length} consultadas, ${imported.length} importadas en revisión (máx. ${maxPostsLimit}), ${discarded.length} descartadas automáticamente, ${duplicatesSkipped} duplicadas omitidas.`;
 
       await updateSyncMetadata(db, {
         lastSyncAt: syncTimestamp,
@@ -330,20 +430,23 @@ export class XService {
         actorRole: moderator.role,
         targetType: 'social_config',
         targetId: 'x-default',
-        details: `${message} Consulta: "${query}".`
+        details: `${message}${discardReasons.length > 0 ? ` Motivos de descarte: ${discardReasons.join(' | ')}.` : ''} Consulta: "${query}".`
       });
 
       return {
         fetchedCount: cappedTweets.length,
         importedCount: imported.length,
+        discardedCount: discarded.length,
         duplicatesSkipped,
+        discardReasons,
         queryUsed: query,
         maxPostsLimit,
         cooldownMinutes: cooldownState.cooldownMinutes,
         nextAllowedSyncAt,
         rateLimitRemaining,
         rateLimitReset,
-        importedPosts: imported
+        importedPosts: imported,
+        discardedPosts: discarded
       };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Error desconocido en sincronización con X.';

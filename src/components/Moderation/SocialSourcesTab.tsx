@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useIncidents } from '../../context/IncidentContext';
 import {
+  ALLOWED_SOCIAL_DISTRICTS,
   DEMO_SOCIAL_POSTS,
   DISTRICT_APPROX_COORDS,
   PERU_DISTRICTS
@@ -39,7 +40,11 @@ import {
   ShieldAlert,
   MapPin,
   Radio,
-  History
+  History,
+  Filter,
+  ChevronDown,
+  X,
+  Calendar
 } from 'lucide-react';
 
 const XLogoIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
@@ -74,16 +79,27 @@ export const SocialSourcesTab: React.FC = () => {
   const [auditLogs, setAuditLogs] = useState<SocialSourceAudit[]>([]);
   const [statusInfo, setStatusInfo] = useState<SocialStatusResponse | null>(null);
   const [queryInput, setQueryInput] = useState(
-    'robo OR asalto OR extorsión OR inseguridad lang:es -is:retweet'
+    '(robo OR asalto OR extorsion OR inseguridad) lang:es -is:retweet'
   );
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [savingQuery, setSavingQuery] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'Pendiente de validación' | 'all'>(
-    'Pendiente de validación'
-  );
+  const [statusFilter, setStatusFilter] = useState<
+    'Pendiente de validación' | 'all' | 'Descartado'
+  >('Pendiente de validación');
+
+  // Visual filter inputs (draft vs applied)
+  const [draftDistricts, setDraftDistricts] = useState<string[]>([]);
+  const [draftDateFrom, setDraftDateFrom] = useState<string>('');
+  const [draftDateTo, setDraftDateTo] = useState<string>('');
+  const [appliedDistricts, setAppliedDistricts] = useState<string[]>([]);
+  const [appliedDateFrom, setAppliedDateFrom] = useState<string>('');
+  const [appliedDateTo, setAppliedDateTo] = useState<string>('');
+  const [districtMenuOpen, setDistrictMenuOpen] = useState(false);
+  const [filterValidationError, setFilterValidationError] = useState<string | null>(null);
+  const districtDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Create Report modal state
   const [creatingFromPost, setCreatingFromPost] = useState<SocialPost | null>(null);
@@ -99,6 +115,20 @@ export const SocialSourcesTab: React.FC = () => {
   const [linkingPost, setLinkingPost] = useState<SocialPost | null>(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState<string>('');
 
+  // Close district dropdown when clicking outside
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (
+        districtDropdownRef.current &&
+        !districtDropdownRef.current.contains(e.target as Node)
+      ) {
+        setDistrictMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
   // Persist demo posts locally when backend is absent
   useEffect(() => {
     if (!backendAvailable) {
@@ -106,18 +136,53 @@ export const SocialSourcesTab: React.FC = () => {
     }
   }, [posts, backendAvailable]);
 
-  const loadBackendSocialData = async () => {
+  const loadBackendSocialData = async (overrideFilters?: {
+    districts?: string[];
+    dateFrom?: string;
+    dateTo?: string;
+  }) => {
     if (!backendAvailable || !isModeratorAuthenticated) return;
     setLoading(true);
     setErrorMsg(null);
     try {
-      const [statusData, postsData, logsData] = await Promise.all([
-        fetchSocialStatus(currentUser),
-        fetchSocialPosts(currentUser),
+      const statusData = await fetchSocialStatus(currentUser);
+      const effectiveDistricts =
+        overrideFilters?.districts !== undefined
+          ? overrideFilters.districts
+          : appliedDistricts.length > 0
+          ? appliedDistricts
+          : statusData.filterDistricts || [];
+      const effectiveDateFrom =
+        overrideFilters?.dateFrom !== undefined
+          ? overrideFilters.dateFrom
+          : appliedDateFrom || statusData.filterDateFrom || '';
+      const effectiveDateTo =
+        overrideFilters?.dateTo !== undefined
+          ? overrideFilters.dateTo
+          : appliedDateTo || statusData.filterDateTo || '';
+
+      const [postsData, logsData] = await Promise.all([
+        fetchSocialPosts(currentUser, {
+          districts: effectiveDistricts,
+          dateFrom: effectiveDateFrom || undefined,
+          dateTo: effectiveDateTo || undefined
+        }),
         fetchSocialAuditLogs(currentUser)
       ]);
-      setStatusInfo(statusData);
+
+      setStatusInfo({ ...statusData, stats: postsData.stats });
       setQueryInput(statusData.searchQuery);
+      if (overrideFilters === undefined && appliedDistricts.length === 0 && !appliedDateFrom && !appliedDateTo) {
+        const initDistricts = statusData.filterDistricts || [];
+        const initFrom = statusData.filterDateFrom || '';
+        const initTo = statusData.filterDateTo || '';
+        setDraftDistricts(initDistricts);
+        setAppliedDistricts(initDistricts);
+        setDraftDateFrom(initFrom);
+        setAppliedDateFrom(initFrom);
+        setDraftDateTo(initTo);
+        setAppliedDateTo(initTo);
+      }
       setPosts(postsData.posts);
       setAuditLogs(logsData);
     } catch (err) {
@@ -133,14 +198,151 @@ export const SocialSourcesTab: React.FC = () => {
     }
   }, [backendAvailable, isModeratorAuthenticated, currentUser?.uid, currentUser?.role]);
 
+  const toggleDraftDistrict = (district: string) => {
+    setDraftDistricts(prev =>
+      prev.includes(district) ? prev.filter(d => d !== district) : [...prev, district]
+    );
+  };
+
+  const handleApplyFilters = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setFilterValidationError(null);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    if (draftDateFrom && draftDateTo && draftDateFrom > draftDateTo) {
+      setFilterValidationError('La fecha desde no puede ser posterior a la fecha hasta.');
+      return;
+    }
+
+    const nextDistricts = [...draftDistricts];
+    const nextFrom = draftDateFrom;
+    const nextTo = draftDateTo;
+
+    setAppliedDistricts(nextDistricts);
+    setAppliedDateFrom(nextFrom);
+    setAppliedDateTo(nextTo);
+    setDistrictMenuOpen(false);
+
+    if (nextDistricts.includes('Sin distrito') && nextDistricts.length === 1) {
+      setStatusFilter('Descartado');
+    }
+
+    if (!backendAvailable || !isModeratorAuthenticated) {
+      setSuccessMsg('Filtros aplicados a las publicaciones de demostración.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Save real Lima/Callao districts & date range so they also apply to the next X sync
+      const syncableDistricts = nextDistricts.filter(d => d !== 'Sin distrito');
+      await updateSocialConfig(currentUser, {
+        filterDistricts: syncableDistricts,
+        filterDateFrom: nextFrom || null,
+        filterDateTo: nextTo || null
+      });
+      await loadBackendSocialData({
+        districts: nextDistricts,
+        dateFrom: nextFrom,
+        dateTo: nextTo
+      });
+      setSuccessMsg(
+        'Filtros aplicados a las publicaciones importadas y guardados para la próxima consulta a X.'
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudieron aplicar los filtros.');
+      setLoading(false);
+    }
+  };
+
+  const handleClearFilters = async () => {
+    setFilterValidationError(null);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setDraftDistricts([]);
+    setDraftDateFrom('');
+    setDraftDateTo('');
+    setAppliedDistricts([]);
+    setAppliedDateFrom('');
+    setAppliedDateTo('');
+    setDistrictMenuOpen(false);
+
+    if (!backendAvailable || !isModeratorAuthenticated) {
+      setSuccessMsg('Filtros restablecidos.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await updateSocialConfig(currentUser, {
+        filterDistricts: [],
+        filterDateFrom: null,
+        filterDateTo: null
+      });
+      await loadBackendSocialData({ districts: [], dateFrom: '', dateTo: '' });
+      setSuccessMsg('Filtros limpiados.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudieron limpiar los filtros.');
+      setLoading(false);
+    }
+  };
+
+  const removeActiveDistrictChip = async (district: string) => {
+    const next = appliedDistricts.filter(d => d !== district);
+    setDraftDistricts(next);
+    setAppliedDistricts(next);
+    if (backendAvailable && isModeratorAuthenticated) {
+      const syncableDistricts = next.filter(d => d !== 'Sin distrito');
+      await updateSocialConfig(currentUser, { filterDistricts: syncableDistricts }).catch(() => {});
+      await loadBackendSocialData({
+        districts: next,
+        dateFrom: appliedDateFrom,
+        dateTo: appliedDateTo
+      });
+    }
+  };
+
+  const clearDateChip = async (which: 'from' | 'to') => {
+    const nextFrom = which === 'from' ? '' : appliedDateFrom;
+    const nextTo = which === 'to' ? '' : appliedDateTo;
+    setDraftDateFrom(nextFrom);
+    setAppliedDateFrom(nextFrom);
+    setDraftDateTo(nextTo);
+    setAppliedDateTo(nextTo);
+    if (backendAvailable && isModeratorAuthenticated) {
+      await updateSocialConfig(currentUser, {
+        filterDateFrom: nextFrom || null,
+        filterDateTo: nextTo || null
+      }).catch(() => {});
+      await loadBackendSocialData({
+        districts: appliedDistricts,
+        dateFrom: nextFrom,
+        dateTo: nextTo
+      });
+    }
+  };
+
   const handleSyncX = async () => {
     setErrorMsg(null);
     setSuccessMsg(null);
+    setFilterValidationError(null);
 
     if (!isModeratorAuthenticated || !isModerator) {
       setErrorMsg('Acceso restringido: debes autenticarte como moderador antes de sincronizar X.');
       return;
     }
+
+    const effectiveFrom = draftDateFrom || appliedDateFrom;
+    const effectiveTo = draftDateTo || appliedDateTo;
+    if (effectiveFrom && effectiveTo && effectiveFrom > effectiveTo) {
+      setFilterValidationError('La fecha desde no puede ser posterior a la fecha hasta.');
+      return;
+    }
+
+    const effectiveDistricts = (draftDistricts.length > 0 ? draftDistricts : appliedDistricts).filter(
+      d => d !== 'Sin distrito'
+    );
 
     if (!backendAvailable || !xConfigured) {
       // Demo simulation when backend or X_BEARER_TOKEN is not configured
@@ -149,7 +351,7 @@ export const SocialSourcesTab: React.FC = () => {
         setSyncing(false);
         setStatusFilter('Pendiente de validación');
         setSuccessMsg(
-          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración en estado "Pendiente de validación".'
+          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración filtradas en Lima y Callao.'
         );
       }, 400);
       return;
@@ -157,10 +359,21 @@ export const SocialSourcesTab: React.FC = () => {
 
     setSyncing(true);
     try {
-      const res = await triggerXSync(currentUser);
+      const res = await triggerXSync(currentUser, {
+        districts: effectiveDistricts,
+        dateFrom: effectiveFrom || undefined,
+        dateTo: effectiveTo || undefined
+      });
+      setAppliedDistricts(draftDistricts);
+      setAppliedDateFrom(effectiveFrom);
+      setAppliedDateTo(effectiveTo);
       setStatusFilter('Pendiente de validación');
       setSuccessMsg(res.message);
-      await loadBackendSocialData();
+      await loadBackendSocialData({
+        districts: draftDistricts,
+        dateFrom: effectiveFrom,
+        dateTo: effectiveTo
+      });
     } catch (err) {
       if (err instanceof ApiClientError) {
         if (err.status === 429 && err.nextAllowedSyncAt) {
@@ -174,6 +387,9 @@ export const SocialSourcesTab: React.FC = () => {
                 }
               : prev
           );
+          setErrorMsg(err.message);
+        } else if (err.code === 'X_INVALID_DATE_RANGE') {
+          setFilterValidationError(err.message);
           setErrorMsg(err.message);
         } else if (
           err.code === 'X_TOKEN_MISSING' ||
@@ -221,19 +437,12 @@ export const SocialSourcesTab: React.FC = () => {
   };
 
   const openCreateModal = (post: SocialPost) => {
-    if (!isModeratorAuthenticated) return;
+    const detected = post.suggestedDistrict || post.detectedDistrict;
+    if (!isModeratorAuthenticated || !detected || detected === 'Sin distrito') return;
     setCreatingFromPost(post);
-    setReportDistrict(post.suggestedDistrict || '');
-    setReportAddress(
-      post.suggestedDistrict
-        ? `Zona aproximada por confirmar en ${post.suggestedDistrict}`
-        : ''
-    );
-    setReportTitle(
-      post.suggestedDistrict
-        ? `Alerta referencial desde X en ${post.suggestedDistrict}`
-        : 'Posible incidente reportado en fuente pública X'
-    );
+    setReportDistrict(detected);
+    setReportAddress(`Zona aproximada por confirmar en ${detected}`);
+    setReportTitle(`Alerta referencial desde X en ${detected}`);
     setReportDescription(sanitizeExternalText(post.text, 400));
     setReportCategory(post.suggestedCategory);
     setReportRiskLevel(post.suggestedRiskLevel);
@@ -413,11 +622,58 @@ export const SocialSourcesTab: React.FC = () => {
     }
   };
 
-  const pendingPostsCount = posts.filter(p => p.status === 'Pendiente de validación').length;
+  // Local filtering for demo mode (or already backend-filtered posts)
+  const filteredPosts = useMemo(() => {
+    return posts.filter(post => {
+      if (appliedDistricts.length > 0) {
+        const detected = post.suggestedDistrict || post.detectedDistrict || 'Sin distrito';
+        const matchesAllowed = appliedDistricts.includes(detected);
+        const matchesNoDistrict =
+          appliedDistricts.includes('Sin distrito') &&
+          post.status === 'Descartado' &&
+          detected === 'Sin distrito';
+
+        if (!matchesAllowed && !matchesNoDistrict) {
+          return false;
+        }
+      }
+
+      if (appliedDateFrom || appliedDateTo) {
+        const publishedMs = new Date(post.publishedAt).getTime();
+        if (Number.isFinite(publishedMs)) {
+          if (appliedDateFrom) {
+            const fromMs = new Date(`${appliedDateFrom}T00:00:00.000Z`).getTime();
+            if (publishedMs < fromMs) return false;
+          }
+          if (appliedDateTo) {
+            const toMs = new Date(`${appliedDateTo}T23:59:59.999Z`).getTime();
+            if (publishedMs > toMs) return false;
+          }
+        }
+      }
+
+      return true;
+    });
+  }, [posts, appliedDistricts, appliedDateFrom, appliedDateTo]);
+
+  const totalCount =
+    backendAvailable && statusInfo?.stats && appliedDistricts.length === 0 && !appliedDateFrom && !appliedDateTo
+      ? statusInfo.stats.total
+      : filteredPosts.length;
+  const pendingPostsCount = filteredPosts.filter(p => p.status === 'Pendiente de validación').length;
+  const verifiedPostsCount = filteredPosts.filter(p => p.status === 'Verificado').length;
+  const discardedPostsCount = filteredPosts.filter(p => p.status === 'Descartado').length;
+
   const visiblePosts =
     statusFilter === 'all'
-      ? posts
-      : posts.filter(p => p.status === 'Pendiente de validación');
+      ? filteredPosts
+      : filteredPosts.filter(p => p.status === statusFilter);
+
+  const allowedDistrictOptions = statusInfo?.allowedDistricts?.length
+    ? statusInfo.allowedDistricts
+    : [...ALLOWED_SOCIAL_DISTRICTS];
+  const hasActiveFilters =
+    appliedDistricts.length > 0 || Boolean(appliedDateFrom) || Boolean(appliedDateTo);
 
   const maxPostsPerSync = statusInfo?.maxPostsPerSync ?? 10;
   const cooldownMinutes = statusInfo?.cooldownMinutes ?? 60;
@@ -526,41 +782,252 @@ export const SocialSourcesTab: React.FC = () => {
           </span>
         </div>
 
-        {/* Metrics strip */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 text-xs">
+        {/* Metrics strip: 4 moderation counters */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-slate-100 text-xs">
           <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-            <span className="text-[11px] text-slate-400 font-semibold block">Estado de conexión</span>
-            <span className="font-bold text-slate-800 mt-0.5 block">
-              {backendAvailable && xConfigured
-                ? 'Conectado (API oficial X v2)'
-                : backendAvailable
-                ? 'Backend activo • Modo demo (sin token X)'
-                : 'Modo demo local'}
+            <span className="text-[11px] text-slate-400 font-semibold block">Importadas</span>
+            <span className="font-extrabold text-lg text-slate-900 mt-0.5 block">
+              {totalCount}
             </span>
           </div>
 
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-            <span className="text-[11px] text-slate-400 font-semibold block">Última sincronización</span>
-            <span className="font-bold text-slate-800 mt-0.5 block">
-              {statusInfo?.lastSyncAt
-                ? new Date(statusInfo.lastSyncAt).toLocaleString('es-PE')
-                : 'Datos de demostración precargados'}
+          <div className="p-3 rounded-2xl bg-amber-50/70 border border-amber-200">
+            <span className="text-[11px] text-amber-700 font-semibold block">Pendientes</span>
+            <span className="font-extrabold text-lg text-amber-800 mt-0.5 block">
+              {pendingPostsCount}
             </span>
           </div>
 
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-            <span className="text-[11px] text-slate-400 font-semibold block">Posts importados / Pendientes</span>
-            <span className="font-bold text-slate-800 mt-0.5 block">
-              {posts.length} importados •{' '}
-              <span className="text-amber-700">{pendingPostsCount} por revisar</span>
+          <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+            <span className="text-[11px] text-emerald-700 font-semibold block">Aprobadas</span>
+            <span className="font-extrabold text-lg text-emerald-800 mt-0.5 block">
+              {verifiedPostsCount}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-slate-100/80 border border-slate-200">
+            <span className="text-[11px] text-slate-500 font-semibold block">Descartadas</span>
+            <span className="font-extrabold text-lg text-slate-700 mt-0.5 block">
+              {discardedPostsCount}
             </span>
           </div>
         </div>
 
+        {/* Visual District & Date Filters (apply to imported posts AND next X sync) */}
+        <form
+          onSubmit={handleApplyFilters}
+          className="pt-3 border-t border-slate-100 space-y-3"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+              <Filter className="w-3.5 h-3.5 text-blue-600" />
+              <span>Filtros de Lima Metropolitana y Callao (importadas y próxima consulta X)</span>
+            </div>
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              {statusInfo?.lastSyncAt
+                ? `Última sync: ${new Date(statusInfo.lastSyncAt).toLocaleString('es-PE')}`
+                : 'Modo demo precargado'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end text-xs">
+            {/* Multi-select District Selector */}
+            <div className="md:col-span-5 relative" ref={districtDropdownRef}>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Distritos permitidos
+              </label>
+              <button
+                type="button"
+                onClick={() => setDistrictMenuOpen(prev => !prev)}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-white text-left flex items-center justify-between gap-2 font-semibold text-slate-700"
+              >
+                <span className="truncate">
+                  {draftDistricts.length === 0
+                    ? 'Todos los distritos'
+                    : draftDistricts.length === 1
+                    ? draftDistricts[0]
+                    : `${draftDistricts.length} distritos seleccionados`}
+                </span>
+                <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+              </button>
+
+              {districtMenuOpen && (
+                <div className="absolute left-0 right-0 mt-1.5 z-30 bg-white rounded-2xl border border-slate-200 shadow-xl p-2 max-h-64 overflow-y-auto space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setDraftDistricts([])}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-between ${
+                      draftDistricts.length === 0
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>Todos los distritos</span>
+                    {draftDistricts.length === 0 && <CheckCircle2 className="w-3.5 h-3.5" />}
+                  </button>
+                  <div className="border-t border-slate-100 my-1" />
+                  {allowedDistrictOptions.map(district => {
+                    const checked = draftDistricts.includes(district);
+                    return (
+                      <label
+                        key={district}
+                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs text-slate-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDraftDistrict(district)}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className={checked ? 'font-bold text-slate-900' : ''}>
+                          {district}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  <div className="border-t border-slate-100 my-1" />
+                  <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs text-slate-500">
+                    <input
+                      type="checkbox"
+                      checked={draftDistricts.includes('Sin distrito')}
+                      onChange={() => toggleDraftDistrict('Sin distrito')}
+                      className="rounded border-slate-300 text-slate-600 focus:ring-slate-400"
+                    />
+                    <span>Sin distrito (solo descartados)</span>
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Fecha desde */}
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Fecha desde
+              </label>
+              <div className="relative">
+                <input
+                  type="date"
+                  aria-label="Fecha desde"
+                  value={draftDateFrom}
+                  onChange={e => setDraftDateFrom(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Fecha hasta */}
+            <div className="md:col-span-2">
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Fecha hasta
+              </label>
+              <div className="relative">
+                <input
+                  type="date"
+                  aria-label="Fecha hasta"
+                  value={draftDateTo}
+                  onChange={e => setDraftDateTo(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Apply / Clear buttons */}
+            <div className="md:col-span-3 flex items-center gap-2">
+              <button
+                type="submit"
+                disabled={loading || syncing}
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-xs"
+              >
+                Aplicar filtros
+              </button>
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                disabled={loading || syncing}
+                className="px-3 py-2.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-semibold text-xs"
+              >
+                Limpiar filtros
+              </button>
+            </div>
+          </div>
+
+          {filterValidationError && (
+            <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] flex items-center gap-1.5 font-semibold">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>{filterValidationError}</span>
+            </div>
+          )}
+
+          {/* Active Filter Chips */}
+          {hasActiveFilters && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[11px] font-semibold text-slate-500 mr-1">
+                Filtros activos:
+              </span>
+              {appliedDistricts.map(district => (
+                <span
+                  key={district}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
+                    district === 'Sin distrito'
+                      ? 'bg-slate-100 text-slate-700 border-slate-300'
+                      : 'bg-blue-50 text-blue-800 border-blue-200'
+                  }`}
+                >
+                  <span>
+                    {district === 'Sin distrito'
+                      ? 'Sin distrito (solo descartados)'
+                      : `Distrito: ${district}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeActiveDistrictChip(district)}
+                    aria-label={`Quitar filtro ${district}`}
+                    className="hover:text-red-600"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              {appliedDateFrom && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                  <Calendar className="w-3 h-3" />
+                  <span>Desde: {appliedDateFrom}</span>
+                  <button
+                    type="button"
+                    onClick={() => clearDateChip('from')}
+                    aria-label="Quitar fecha desde"
+                    className="hover:text-red-600"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {appliedDateTo && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                  <Calendar className="w-3 h-3" />
+                  <span>Hasta: {appliedDateTo}</span>
+                  <button
+                    type="button"
+                    onClick={() => clearDateChip('to')}
+                    aria-label="Quitar fecha hasta"
+                    className="hover:text-red-600"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-400">
+            X API v2 Recent Search consulta publicaciones recientes (típicamente hasta los últimos 7 días). Si X rechaza el rango de fechas solicitado, se mostrará el aviso correspondiente.
+          </p>
+        </form>
+
         {/* Moderator Configurable Search Query */}
         <form onSubmit={handleSaveQuery} className="pt-2 border-t border-slate-100 space-y-2">
           <label className="block text-xs font-bold text-slate-800">
-            Consulta oficial configurada para X API v2 (solo moderadores):
+            Palabras clave base para X API v2 (solo moderadores):
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="relative flex-1">
@@ -571,7 +1038,7 @@ export const SocialSourcesTab: React.FC = () => {
                 onChange={e => setQueryInput(e.target.value)}
                 disabled={!isModeratorAuthenticated}
                 maxLength={250}
-                placeholder="Ej: robo OR asalto OR extorsión OR inseguridad lang:es"
+                placeholder="Ej: (robo OR asalto OR extorsion OR inseguridad) lang:es -is:retweet"
                 className="w-full text-xs pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono disabled:opacity-60"
               />
             </div>
@@ -605,12 +1072,12 @@ export const SocialSourcesTab: React.FC = () => {
         </div>
       )}
 
-      {/* Filter strip */}
-      <div className="flex items-center justify-between">
+      {/* Filter tabs: Pendientes, Todas, Descartadas */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="font-bold text-xs uppercase tracking-wider text-slate-600">
           Publicaciones importadas de X ({visiblePosts.length})
         </h4>
-        <div className="flex items-center gap-1.5 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <button
             onClick={() => setStatusFilter('Pendiente de validación')}
             className={`px-3 py-1 rounded-lg font-bold ${
@@ -629,7 +1096,17 @@ export const SocialSourcesTab: React.FC = () => {
                 : 'bg-white border border-slate-200 text-slate-600'
             }`}
           >
-            Todas ({posts.length})
+            Todas ({filteredPosts.length})
+          </button>
+          <button
+            onClick={() => setStatusFilter('Descartado')}
+            className={`px-3 py-1 rounded-lg font-bold ${
+              statusFilter === 'Descartado'
+                ? 'bg-slate-800 text-white'
+                : 'bg-white border border-slate-200 text-slate-600'
+            }`}
+          >
+            Descartadas ({discardedPostsCount})
           </button>
         </div>
       </div>
@@ -642,9 +1119,15 @@ export const SocialSourcesTab: React.FC = () => {
       ) : visiblePosts.length === 0 ? (
         <div className="bg-white p-10 rounded-3xl border border-slate-200 text-center space-y-2">
           <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
-          <p className="font-bold text-sm text-slate-800">Sin publicaciones pendientes</p>
+          <p className="font-bold text-sm text-slate-800">
+            {statusFilter === 'Descartado'
+              ? 'Sin publicaciones descartadas para este filtro'
+              : 'Sin publicaciones para mostrar'}
+          </p>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            Todas las publicaciones importadas de X han sido revisadas. Presiona “Sincronizar X” para consultar nuevas alertas públicas.
+            {hasActiveFilters
+              ? 'Prueba ajustando o limpiando los filtros de distrito y fechas, o presiona “Sincronizar X” para consultar nuevas alertas públicas.'
+              : 'Todas las publicaciones importadas de X han sido revisadas. Presiona “Sincronizar X” para consultar nuevas alertas públicas.'}
           </p>
         </div>
       ) : (
@@ -653,6 +1136,10 @@ export const SocialSourcesTab: React.FC = () => {
             const safeUrl = getSafeExternalUrl(post.postUrl);
             const safeExcerpt = sanitizeExternalText(post.text, 320);
             const isPending = post.status === 'Pendiente de validación';
+            const detectedDistrict =
+              post.suggestedDistrict || post.detectedDistrict || 'Sin distrito';
+            const hasConfirmedDistrict =
+              Boolean(detectedDistrict) && detectedDistrict !== 'Sin distrito';
 
             return (
               <div
@@ -699,17 +1186,20 @@ export const SocialSourcesTab: React.FC = () => {
 
                 {/* Metadata tags */}
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border font-semibold ${
+                      hasConfirmedDistrict
+                        ? 'bg-blue-50 text-blue-800 border-blue-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    <MapPin className="w-3 h-3" />
+                    Distrito detectado: {detectedDistrict}
+                  </span>
+
                   <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-mono">
                     Consulta: {sanitizeExternalText(post.queryUsed, 90)}
                   </span>
-
-                  {post.suggestedDistrict && (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
-                      <MapPin className="w-3 h-3" />
-                      Distrito sugerido: {post.suggestedDistrict} •{' '}
-                      <strong className="text-amber-700">Por confirmar</strong>
-                    </span>
-                  )}
 
                   {safeUrl && (
                     <a
@@ -724,12 +1214,27 @@ export const SocialSourcesTab: React.FC = () => {
                   )}
                 </div>
 
+                {/* Discard Reason if discarded */}
+                {post.status === 'Descartado' && post.reviewReason && (
+                  <div className="px-3 py-2 rounded-xl bg-slate-100 border border-slate-200 text-[11px] text-slate-700 flex items-center gap-1.5">
+                    <XCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>
+                      <strong>Motivo de descarte:</strong> {post.reviewReason}
+                    </span>
+                  </div>
+                )}
+
                 {/* Actions */}
                 {isPending ? (
                   <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => openCreateModal(post)}
-                      disabled={!isModeratorAuthenticated}
+                      disabled={!isModeratorAuthenticated || !hasConfirmedDistrict}
+                      title={
+                        !hasConfirmedDistrict
+                          ? 'Se requiere un distrito permitido confirmado para crear reporte'
+                          : 'Crear reporte en Pendiente de validación'
+                      }
                       className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
                     >
                       <PlusCircle className="w-3.5 h-3.5" />
@@ -760,7 +1265,9 @@ export const SocialSourcesTab: React.FC = () => {
                       Revisado por {post.moderatorName || 'Moderación'}
                       {post.linkedIncidentId ? ` • Vinculado a ${post.linkedIncidentId}` : ''}
                     </span>
-                    {post.reviewReason && <span className="italic">{post.reviewReason}</span>}
+                    {post.reviewedAt && (
+                      <span>{new Date(post.reviewedAt).toLocaleString('es-PE')}</span>
+                    )}
                   </div>
                 )}
               </div>
@@ -925,8 +1432,8 @@ export const SocialSourcesTab: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingAction}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm"
+                  disabled={submittingAction || !reportDistrict.trim() || reportDistrict === 'Sin distrito'}
+                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold shadow-sm"
                 >
                   {submittingAction ? 'Creando...' : 'Crear reporte pendiente'}
                 </button>

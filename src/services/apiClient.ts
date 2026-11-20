@@ -73,6 +73,10 @@ export interface SocialStatusResponse {
   isSyncing: boolean;
   searchQuery: string;
   retentionDays: number;
+  filterDistricts?: string[];
+  filterDateFrom?: string;
+  filterDateTo?: string;
+  allowedDistricts?: string[];
   maxPostsPerSync?: number;
   cooldownMinutes?: number;
   canSyncNow?: boolean;
@@ -300,16 +304,40 @@ export async function fetchSocialStatus(user: UserProfile | null): Promise<Socia
   return data;
 }
 
+export interface SocialFilterOptions {
+  districts?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+}
+
 export async function updateSocialConfig(
   user: UserProfile | null,
-  payload: { searchQuery?: string; retentionDays?: number }
-): Promise<{ searchQuery: string; retentionDays: number }> {
+  payload: {
+    searchQuery?: string;
+    retentionDays?: number;
+    filterDistricts?: string[];
+    filterDateFrom?: string | null;
+    filterDateTo?: string | null;
+  }
+): Promise<{
+  searchQuery: string;
+  retentionDays: number;
+  filterDistricts?: string[];
+  filterDateFrom?: string;
+  filterDateTo?: string;
+}> {
   const res = await authorizedFetch('/api/social/config', user, {
     method: 'PUT',
     body: JSON.stringify(payload)
   });
   const data = (await res.json()) as {
-    config?: { searchQuery: string; retentionDays: number };
+    config?: {
+      searchQuery: string;
+      retentionDays: number;
+      filterDistricts?: string[];
+      filterDateFrom?: string;
+      filterDateTo?: string;
+    };
     error?: string;
   };
   if (!res.ok || !data.config) {
@@ -321,12 +349,17 @@ export async function updateSocialConfig(
   return data.config;
 }
 
-export async function triggerXSync(user: UserProfile | null): Promise<{
+export async function triggerXSync(
+  user: UserProfile | null,
+  filters?: SocialFilterOptions
+): Promise<{
   message: string;
   result: {
     fetchedCount: number;
     importedCount: number;
+    discardedCount?: number;
     duplicatesSkipped: number;
+    discardReasons?: string[];
     queryUsed: string;
     maxPostsLimit?: number;
     cooldownMinutes?: number;
@@ -335,7 +368,8 @@ export async function triggerXSync(user: UserProfile | null): Promise<{
   stats: SocialStatusResponse['stats'];
 }> {
   const res = await authorizedFetch('/api/social/x/sync', user, {
-    method: 'POST'
+    method: 'POST',
+    body: filters ? JSON.stringify(filters) : undefined
   });
   const data = (await res.json().catch(() => ({}))) as {
     message?: string;
@@ -345,7 +379,9 @@ export async function triggerXSync(user: UserProfile | null): Promise<{
     result?: {
       fetchedCount: number;
       importedCount: number;
+      discardedCount?: number;
       duplicatesSkipped: number;
+      discardReasons?: string[];
       queryUsed: string;
       maxPostsLimit?: number;
       cooldownMinutes?: number;
@@ -370,9 +406,22 @@ export async function triggerXSync(user: UserProfile | null): Promise<{
 
 export async function fetchSocialPosts(
   user: UserProfile | null,
-  status?: SocialPostStatus
+  statusOrFilters?: SocialPostStatus | (SocialFilterOptions & { status?: SocialPostStatus })
 ): Promise<{ posts: SocialPost[]; stats: SocialStatusResponse['stats'] }> {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
+  const filters =
+    typeof statusOrFilters === 'string'
+      ? { status: statusOrFilters }
+      : statusOrFilters || {};
+
+  const search = new URLSearchParams();
+  if (filters.status) search.set('status', filters.status);
+  if (filters.districts && filters.districts.length > 0) {
+    search.set('districts', filters.districts.join(','));
+  }
+  if (filters.dateFrom) search.set('dateFrom', filters.dateFrom);
+  if (filters.dateTo) search.set('dateTo', filters.dateTo);
+
+  const qs = search.toString() ? `?${search.toString()}` : '';
   const res = await authorizedFetch(`/api/social/posts${qs}`, user);
   const data = (await res.json()) as {
     posts?: SocialPost[];

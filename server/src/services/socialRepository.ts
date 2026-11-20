@@ -7,17 +7,20 @@ import {
   ReportStatus,
   RiskLevel,
   SocialPostRecord,
+  SocialPostState,
   SocialPostStatus,
   SocialSourceConfig
 } from '../types.js';
 import {
+  buildXRecentSearchQuery,
   DISTRICT_APPROX_CENTERS,
+  sanitizeAllowedDistricts,
   sanitizeExternalText,
   sanitizeXPostUrl
 } from '../utils/sanitize.js';
 import { recordAuditLog } from './auditService.js';
 
-export const DEFAULT_X_QUERY = 'robo OR asalto OR extorsión OR inseguridad lang:es -is:retweet';
+export const DEFAULT_X_QUERY = buildXRecentSearchQuery();
 
 interface IncidentRow {
   id: string;
@@ -66,12 +69,51 @@ interface SocialConfigRow {
   id: string;
   search_query: string;
   retention_days: number;
+  filter_districts: string | null;
+  filter_date_from: string | null;
+  filter_date_to: string | null;
   last_sync_at: string | null;
   last_sync_status: 'success' | 'error' | 'idle' | null;
   last_sync_message: string | null;
   last_imported_count: number;
   updated_at: string;
   updated_by: string | null;
+}
+
+function parseFilterDistricts(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return sanitizeAllowedDistricts(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return [];
+  }
+}
+
+export function isValidIsoDateOnly(value: string | undefined): boolean {
+  if (!value) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+export function validateDateRange(dateFrom?: string, dateTo?: string): {
+  dateFrom?: string;
+  dateTo?: string;
+} {
+  const cleanFrom = dateFrom?.trim() || undefined;
+  const cleanTo = dateTo?.trim() || undefined;
+
+  if (cleanFrom && !isValidIsoDateOnly(cleanFrom)) {
+    throw new Error('BAD_REQUEST: Formato de "Fecha desde" inválido. Usa YYYY-MM-DD.');
+  }
+  if (cleanTo && !isValidIsoDateOnly(cleanTo)) {
+    throw new Error('BAD_REQUEST: Formato de "Fecha hasta" inválido. Usa YYYY-MM-DD.');
+  }
+  if (cleanFrom && cleanTo && cleanFrom > cleanTo) {
+    throw new Error('BAD_REQUEST: La fecha desde no puede ser posterior a la fecha hasta.');
+  }
+  return { dateFrom: cleanFrom, dateTo: cleanTo };
 }
 
 function mapIncidentRow(row: IncidentRow): IncidentReportRecord {
@@ -101,11 +143,19 @@ function mapIncidentRow(row: IncidentRow): IncidentReportRecord {
   };
 }
 
+function mapSocialPostState(status: SocialPostStatus): SocialPostState {
+  if (status === 'Verificado') return 'verified';
+  if (status === 'Descartado') return 'discarded';
+  return 'pending_validation';
+}
+
 function mapSocialPostRow(row: SocialPostRow): SocialPostRecord {
   // Note: author_username is intentionally NEVER returned in API DTOs
+  const detectedDistrict = row.suggested_district ?? undefined;
   return {
     id: row.id,
     platform: row.platform,
+    source: 'x',
     externalPostId: row.external_post_id,
     postUrl: sanitizeXPostUrl(row.post_url, row.external_post_id),
     text: sanitizeExternalText(row.text, 500),
@@ -113,9 +163,11 @@ function mapSocialPostRow(row: SocialPostRow): SocialPostRecord {
     importedAt: row.imported_at,
     queryUsed: row.query_used,
     status: row.status,
+    state: mapSocialPostState(row.status),
     suggestedCategory: row.suggested_category,
     suggestedRiskLevel: row.suggested_risk_level,
-    suggestedDistrict: row.suggested_district ?? undefined,
+    suggestedDistrict: detectedDistrict,
+    detectedDistrict: detectedDistrict || 'Sin distrito',
     moderatorId: row.moderator_id ?? undefined,
     moderatorName: row.moderator_name ?? undefined,
     reviewReason: row.review_reason ?? undefined,
@@ -135,6 +187,9 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
       id: existing.id,
       searchQuery: existing.search_query,
       retentionDays: Number(existing.retention_days),
+      filterDistricts: parseFilterDistricts(existing.filter_districts),
+      filterDateFrom: existing.filter_date_from ?? undefined,
+      filterDateTo: existing.filter_date_to ?? undefined,
       lastSyncAt: existing.last_sync_at ?? undefined,
       lastSyncStatus: existing.last_sync_status ?? 'idle',
       lastSyncMessage: existing.last_sync_message ?? undefined,
@@ -146,8 +201,8 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
 
   const now = new Date().toISOString();
   await db.execute(
-    `INSERT INTO social_configs (id, search_query, retention_days, last_sync_status, last_imported_count, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO social_configs (id, search_query, retention_days, filter_districts, filter_date_from, filter_date_to, last_sync_status, last_imported_count, updated_at)
+     VALUES (?, ?, ?, '[]', NULL, NULL, ?, ?, ?)`,
     ['x-default', DEFAULT_X_QUERY, Number(process.env.SOCIAL_RETENTION_DAYS || 30), 'idle', 0, now]
   );
 
@@ -155,6 +210,7 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
     id: 'x-default',
     searchQuery: DEFAULT_X_QUERY,
     retentionDays: Number(process.env.SOCIAL_RETENTION_DAYS || 30),
+    filterDistricts: [],
     lastSyncStatus: 'idle',
     lastImportedCount: 0,
     updatedAt: now
@@ -163,13 +219,41 @@ export async function getOrCreateSocialConfig(db: DatabaseAdapter): Promise<Soci
 
 export async function updateSocialConfig(
   db: DatabaseAdapter,
-  updates: { searchQuery?: string; retentionDays?: number },
+  updates: {
+    searchQuery?: string;
+    retentionDays?: number;
+    filterDistricts?: string[];
+    filterDateFrom?: string | null;
+    filterDateTo?: string | null;
+  },
   actor: AuthenticatedUser
 ): Promise<SocialSourceConfig> {
   const current = await getOrCreateSocialConfig(db);
+
+  const nextDistricts =
+    updates.filterDistricts !== undefined
+      ? sanitizeAllowedDistricts(updates.filterDistricts)
+      : current.filterDistricts;
+
+  const rawFrom =
+    updates.filterDateFrom === null
+      ? undefined
+      : updates.filterDateFrom !== undefined
+      ? updates.filterDateFrom
+      : current.filterDateFrom;
+  const rawTo =
+    updates.filterDateTo === null
+      ? undefined
+      : updates.filterDateTo !== undefined
+      ? updates.filterDateTo
+      : current.filterDateTo;
+
+  const validatedDates = validateDateRange(rawFrom, rawTo);
+
   const nextQuery = updates.searchQuery
     ? sanitizeExternalText(updates.searchQuery, 250)
-    : current.searchQuery;
+    : buildXRecentSearchQuery(nextDistricts, current.searchQuery);
+
   const nextRetention =
     typeof updates.retentionDays === 'number' && Number.isFinite(updates.retentionDays)
       ? Math.max(1, Math.min(365, Math.floor(updates.retentionDays)))
@@ -178,9 +262,18 @@ export async function updateSocialConfig(
 
   await db.execute(
     `UPDATE social_configs
-     SET search_query = ?, retention_days = ?, updated_at = ?, updated_by = ?
+     SET search_query = ?, retention_days = ?, filter_districts = ?, filter_date_from = ?, filter_date_to = ?, updated_at = ?, updated_by = ?
      WHERE id = ?`,
-    [nextQuery, nextRetention, now, actor.name, 'x-default']
+    [
+      nextQuery,
+      nextRetention,
+      JSON.stringify(nextDistricts),
+      validatedDates.dateFrom ?? null,
+      validatedDates.dateTo ?? null,
+      now,
+      actor.name,
+      'x-default'
+    ]
   );
 
   await recordAuditLog(db, {
@@ -190,7 +283,7 @@ export async function updateSocialConfig(
     actorRole: actor.role,
     targetType: 'social_config',
     targetId: 'x-default',
-    details: `Consulta actualizada ("${nextQuery}"), retención: ${nextRetention} días.`
+    details: `Filtros actualizados (distritos: ${nextDistricts.length > 0 ? nextDistricts.join(', ') : 'Todos'}, fechas: ${validatedDates.dateFrom || '—'} a ${validatedDates.dateTo || '—'}). Consulta: "${nextQuery}", retención: ${nextRetention} días.`
   });
 
   return getOrCreateSocialConfig(db);
@@ -237,14 +330,35 @@ export async function updateSyncMetadata(
   );
 }
 
+export interface EvaluatedSocialPostInput {
+  platform: 'x';
+  externalPostId: string;
+  postUrl: string;
+  text: string;
+  publishedAt: string;
+  queryUsed: string;
+  suggestedCategory: IncidentCategory;
+  suggestedRiskLevel: RiskLevel;
+  suggestedDistrict?: string;
+  status?: SocialPostStatus;
+  reviewReason?: string;
+}
+
 /**
- * Inserts a batch of normalized X posts while deduplicating by external_post_id.
+ * Inserts a batch of normalized & validated X posts while deduplicating by external_post_id.
+ * Accepted posts start as "Pendiente de validación"; auto-rejected posts are saved as "Descartado"
+ * with their explicit discard reason so moderators can audit them without polluting pending posts.
  */
 export async function insertSocialPostsDeduped(
   db: DatabaseAdapter,
-  posts: Array<Omit<SocialPostRecord, 'id' | 'importedAt' | 'status'>>
-): Promise<{ imported: SocialPostRecord[]; duplicatesSkipped: number }> {
+  posts: EvaluatedSocialPostInput[]
+): Promise<{
+  imported: SocialPostRecord[];
+  discarded: SocialPostRecord[];
+  duplicatesSkipped: number;
+}> {
   const imported: SocialPostRecord[] = [];
+  const discarded: SocialPostRecord[] = [];
   let duplicatesSkipped = 0;
 
   for (const post of posts) {
@@ -262,12 +376,21 @@ export async function insertSocialPostsDeduped(
     const importedAt = new Date().toISOString();
     const safeText = sanitizeExternalText(post.text, 500);
     const safeUrl = sanitizeXPostUrl(post.postUrl, post.externalPostId);
+    const status: SocialPostStatus = post.status || 'Pendiente de validación';
+    const isDiscarded = status === 'Descartado';
+    const safeReason = post.reviewReason
+      ? sanitizeExternalText(post.reviewReason, 240)
+      : undefined;
+    const moderatorName = isDiscarded ? 'Filtro automático Lima/Callao' : null;
+    const reviewedAt = isDiscarded ? importedAt : null;
+    const districtValue = post.suggestedDistrict || (isDiscarded ? 'Sin distrito' : null);
 
     const result = await db.execute(
       `INSERT INTO social_posts (
         id, platform, external_post_id, post_url, text, published_at, imported_at,
-        author_username, query_used, status, suggested_category, suggested_risk_level, suggested_district
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'Pendiente de validación', ?, ?, ?)
+        author_username, query_used, status, suggested_category, suggested_risk_level,
+        suggested_district, moderator_name, review_reason, reviewed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(external_post_id) DO NOTHING`,
       [
         id,
@@ -278,9 +401,13 @@ export async function insertSocialPostsDeduped(
         post.publishedAt,
         importedAt,
         post.queryUsed,
+        status,
         post.suggestedCategory,
         post.suggestedRiskLevel,
-        post.suggestedDistrict ?? null
+        districtValue,
+        moderatorName,
+        safeReason ?? null,
+        reviewedAt
       ]
     );
 
@@ -289,44 +416,108 @@ export async function insertSocialPostsDeduped(
       continue;
     }
 
-    imported.push({
+    const record: SocialPostRecord = {
       id,
       platform: 'x',
+      source: 'x',
       externalPostId: post.externalPostId,
       postUrl: safeUrl,
       text: safeText,
       publishedAt: post.publishedAt,
       importedAt,
       queryUsed: post.queryUsed,
-      status: 'Pendiente de validación',
+      status,
+      state: mapSocialPostState(status),
       suggestedCategory: post.suggestedCategory,
       suggestedRiskLevel: post.suggestedRiskLevel,
-      suggestedDistrict: post.suggestedDistrict
-    });
+      suggestedDistrict: districtValue ?? undefined,
+      detectedDistrict: districtValue ?? 'Sin distrito',
+      moderatorName: moderatorName ?? undefined,
+      reviewReason: safeReason,
+      reviewedAt: reviewedAt ?? undefined
+    };
+
+    if (isDiscarded) {
+      discarded.push(record);
+    } else {
+      imported.push(record);
+    }
   }
 
-  return { imported, duplicatesSkipped };
+  return { imported, discarded, duplicatesSkipped };
+}
+
+export interface ListSocialPostsFilter {
+  status?: SocialPostStatus;
+  districts?: string[];
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export async function listSocialPosts(
   db: DatabaseAdapter,
-  status?: SocialPostStatus
+  filterOrStatus?: SocialPostStatus | ListSocialPostsFilter
 ): Promise<SocialPostRecord[]> {
-  // Strictly select safe columns; omit author_username
-  const sql = status
-    ? `SELECT id, platform, external_post_id, post_url, text, published_at, imported_at,
-              query_used, status, suggested_category, suggested_risk_level, suggested_district,
-              moderator_id, moderator_name, review_reason, reviewed_at, linked_incident_id
-       FROM social_posts
-       WHERE status = ?
-       ORDER BY published_at DESC`
-    : `SELECT id, platform, external_post_id, post_url, text, published_at, imported_at,
-              query_used, status, suggested_category, suggested_risk_level, suggested_district,
-              moderator_id, moderator_name, review_reason, reviewed_at, linked_incident_id
-       FROM social_posts
-       ORDER BY imported_at DESC`;
+  const filters: ListSocialPostsFilter =
+    typeof filterOrStatus === 'string'
+      ? { status: filterOrStatus }
+      : filterOrStatus || {};
 
-  const rows = await db.query<SocialPostRow>(sql, status ? [status] : []);
+  const { dateFrom, dateTo } = validateDateRange(filters.dateFrom, filters.dateTo);
+
+  const conditions: string[] = [];
+  const params: Array<string> = [];
+
+  if (filters.status) {
+    conditions.push(`status = ?`);
+    params.push(filters.status);
+  }
+
+  if (filters.districts && filters.districts.length > 0) {
+    const includeNoDistrict = filters.districts.includes('Sin distrito');
+    const allowedDistricts = sanitizeAllowedDistricts(filters.districts);
+    const districtClauses: string[] = [];
+
+    if (allowedDistricts.length > 0) {
+      const placeholders = allowedDistricts.map(() => '?').join(', ');
+      districtClauses.push(`suggested_district IN (${placeholders})`);
+      params.push(...allowedDistricts);
+    }
+
+    if (includeNoDistrict) {
+      // "Sin distrito" is strictly a discarded-only category, never eligible for pending/verified
+      districtClauses.push(
+        `((suggested_district IS NULL OR suggested_district = 'Sin distrito') AND status = 'Descartado')`
+      );
+    }
+
+    if (districtClauses.length > 0) {
+      conditions.push(`(${districtClauses.join(' OR ')})`);
+    }
+  }
+
+  if (dateFrom) {
+    conditions.push(`published_at >= ?`);
+    params.push(`${dateFrom}T00:00:00.000Z`);
+  }
+
+  if (dateTo) {
+    conditions.push(`published_at <= ?`);
+    params.push(`${dateTo}T23:59:59.999Z`);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const orderClause = filters.status ? 'ORDER BY published_at DESC' : 'ORDER BY imported_at DESC, published_at DESC';
+
+  // Strictly select safe columns; omit author_username
+  const sql = `SELECT id, platform, external_post_id, post_url, text, published_at, imported_at,
+            query_used, status, suggested_category, suggested_risk_level, suggested_district,
+            moderator_id, moderator_name, review_reason, reviewed_at, linked_incident_id
+     FROM social_posts
+     ${whereClause}
+     ${orderClause}`;
+
+  const rows = await db.query<SocialPostRow>(sql, params);
   return rows.map(mapSocialPostRow);
 }
 
@@ -597,10 +788,16 @@ export async function reviewSocialPost(
   }
 
   // action === 'create_report'
-  const confirmedDistrict = (payload.district || '').trim();
-  if (!confirmedDistrict) {
+  if (post.status === 'Descartado') {
     throw new Error(
-      'BAD_REQUEST: El moderador debe seleccionar o confirmar el distrito y ubicación aproximada antes de crear el reporte.'
+      'BAD_REQUEST: No se puede crear un reporte desde una publicación descartada.'
+    );
+  }
+
+  const confirmedDistrict = (payload.district || '').trim();
+  if (!confirmedDistrict || confirmedDistrict === 'Sin distrito') {
+    throw new Error(
+      'BAD_REQUEST: El moderador debe seleccionar o confirmar un distrito válido antes de crear el reporte.'
     );
   }
 

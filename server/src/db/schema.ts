@@ -47,6 +47,9 @@ export const SCHEMA_STATEMENTS = [
     id TEXT PRIMARY KEY,
     search_query TEXT NOT NULL,
     retention_days INTEGER NOT NULL DEFAULT 30,
+    filter_districts TEXT NOT NULL DEFAULT '[]',
+    filter_date_from TEXT,
+    filter_date_to TEXT,
     last_sync_at TEXT,
     last_sync_status TEXT,
     last_sync_message TEXT,
@@ -71,4 +74,10 @@ export const SCHEMA_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_social_posts_published_at ON social_posts(published_at)`,
   `CREATE INDEX IF NOT EXISTS idx_incidents_status_source ON incidents(status, source)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)`
+];
+
+export const CONFIG_COLUMN_MIGRATIONS = [
+  `ALTER TABLE social_configs ADD COLUMN filter_districts TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE social_configs ADD COLUMN filter_date_from TEXT`,
+  `ALTER TABLE social_configs ADD COLUMN filter_date_to TEXT`
 ];

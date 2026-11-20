@@ -18,10 +18,12 @@ import {
   SyncConflictError,
   XConfigurationError,
   XCreditsError,
+  XDateRangeError,
   XRateLimitError,
   XService,
   XSyncCooldownError
 } from '../services/xService.js';
+import { ALLOWED_SOCIAL_DISTRICTS } from '../utils/sanitize.js';
 import { SocialPostStatus } from '../types.js';
 
 export function createSocialRouter(db: DatabaseAdapter, xService: XService): Router {
@@ -47,7 +49,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   });
 
-  // Moderator-only: view X connection status, query, and counts
+  // Moderator-only: view X connection status, query, filters, and counts
   router.get(
     '/status',
     requireAuth,
@@ -62,6 +64,10 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
           isSyncing: xService.isSyncInProgress(),
           searchQuery: config.searchQuery,
           retentionDays: config.retentionDays,
+          filterDistricts: config.filterDistricts,
+          filterDateFrom: config.filterDateFrom,
+          filterDateTo: config.filterDateTo,
+          allowedDistricts: [...ALLOWED_SOCIAL_DISTRICTS],
           maxPostsPerSync: getSyncMaxPosts(),
           cooldownMinutes: cooldown.cooldownMinutes,
           canSyncNow: cooldown.canSyncNow,
@@ -80,7 +86,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   );
 
-  // Moderator-only: update configurable X query & retention policy
+  // Moderator-only: update configurable X query, filters & retention policy
   router.put(
     '/config',
     requireAuth,
@@ -88,10 +94,14 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     moderationLimiter,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const { searchQuery, retentionDays } = req.body as {
-          searchQuery?: string;
-          retentionDays?: number;
-        };
+        const { searchQuery, retentionDays, filterDistricts, filterDateFrom, filterDateTo } =
+          req.body as {
+            searchQuery?: string;
+            retentionDays?: number;
+            filterDistricts?: string[];
+            filterDateFrom?: string | null;
+            filterDateTo?: string | null;
+          };
 
         if (searchQuery !== undefined && (!searchQuery.trim() || searchQuery.trim().length < 3)) {
           res.status(400).json({
@@ -102,12 +112,17 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
 
         const updated = await updateSocialConfig(
           db,
-          { searchQuery, retentionDays },
+          { searchQuery, retentionDays, filterDistricts, filterDateFrom, filterDateTo },
           req.authUser!
         );
 
         res.json({ config: updated });
       } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.startsWith('BAD_REQUEST:')) {
+          res.status(400).json({ error: msg.replace('BAD_REQUEST:', '').trim() });
+          return;
+        }
         console.error('[social/config] Error:', err);
         res.status(500).json({ error: 'No se pudo actualizar la configuración de búsqueda.' });
       }
@@ -122,16 +137,43 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     syncLimiter,
     async (req: AuthenticatedRequest, res) => {
       try {
-        const result = await xService.syncRecentPublicPosts(db, req.authUser!);
+        const body = (req.body || {}) as {
+          districts?: string[];
+          dateFrom?: string;
+          dateTo?: string;
+        };
+        const hasFiltersInBody =
+          body.districts !== undefined ||
+          body.dateFrom !== undefined ||
+          body.dateTo !== undefined;
+
+        const result = await xService.syncRecentPublicPosts(
+          db,
+          req.authUser!,
+          hasFiltersInBody
+            ? {
+                districts: body.districts,
+                dateFrom: body.dateFrom,
+                dateTo: body.dateTo
+              }
+            : undefined
+        );
         const stats = await getSocialPostStats(db);
         res.json({
-          message: `Sincronización completada: ${result.importedCount} nuevas publicaciones importadas.`,
+          message: `Sincronización completada: ${result.importedCount} nuevas publicaciones importadas, ${result.discardedCount} descartadas.`,
           result,
           stats
         });
       } catch (err) {
         if (err instanceof SyncConflictError) {
           res.status(409).json({ error: err.message });
+          return;
+        }
+        if (err instanceof XDateRangeError) {
+          res.status(400).json({
+            error: err.message,
+            code: 'X_INVALID_DATE_RANGE'
+          });
           return;
         }
         if (err instanceof XSyncCooldownError) {
@@ -170,7 +212,7 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
     }
   );
 
-  // Moderator-only: list imported social posts (pending, verified, discarded)
+  // Moderator-only: list imported social posts (pending, verified, discarded) with district/date filters
   router.get(
     '/posts',
     requireAuth,
@@ -186,10 +228,31 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
         const filterStatus =
           statusParam && validStatuses.includes(statusParam) ? statusParam : undefined;
 
-        const posts = await listSocialPosts(db, filterStatus);
+        const rawDistricts = typeof req.query.districts === 'string' ? req.query.districts : '';
+        const districts = rawDistricts
+          .split(',')
+          .map(d => d.trim())
+          .filter(Boolean);
+
+        const dateFrom =
+          typeof req.query.dateFrom === 'string' ? req.query.dateFrom.trim() || undefined : undefined;
+        const dateTo =
+          typeof req.query.dateTo === 'string' ? req.query.dateTo.trim() || undefined : undefined;
+
+        const posts = await listSocialPosts(db, {
+          status: filterStatus,
+          districts: districts.length > 0 ? districts : undefined,
+          dateFrom,
+          dateTo
+        });
         const stats = await getSocialPostStats(db);
         res.json({ posts, stats });
       } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.startsWith('BAD_REQUEST:')) {
+          res.status(400).json({ error: msg.replace('BAD_REQUEST:', '').trim() });
+          return;
+        }
         console.error('[social/posts] Error:', err);
         res.status(500).json({ error: 'No se pudieron listar las publicaciones sociales.' });
       }

@@ -379,8 +379,23 @@ export const DEMO_TRUSTED_CONTACTS: TrustedContact[] = [
   }
 ];
 
+export const ALLOWED_SOCIAL_DISTRICTS = [
+  'Lima',
+  'Callao',
+  'Comas',
+  'Los Olivos',
+  'San Juan de Lurigancho',
+  'San Martín de Porres',
+  'Santiago de Surco',
+  'Villa El Salvador',
+  'Miraflores',
+  'Ate',
+  'Chorrillos'
+] as const;
+
 export const PERU_DISTRICTS = [
   'Todos los distritos',
+  'Lima',
   'Lima (Cercado)',
   'Comas',
   'San Juan de Lurigancho',
@@ -394,7 +409,8 @@ export const PERU_DISTRICTS = [
   'Villa El Salvador',
   'San Borja',
   'La Victoria',
-  'Independencia'
+  'Independencia',
+  'Chorrillos'
 ];
 
 export const EMERGENCY_SERVICES = [
@@ -431,6 +447,7 @@ export const EMERGENCY_SERVICES = [
 ];
 
 export const DISTRICT_APPROX_COORDS: Record<string, { lat: number; lng: number }> = {
+  Lima: { lat: -12.0464, lng: -77.0428 },
   'Lima (Cercado)': { lat: -12.0464, lng: -77.0428 },
   Comas: { lat: -11.9352, lng: -77.0541 },
   'San Juan de Lurigancho': { lat: -11.9865, lng: -77.0042 },
@@ -444,53 +461,84 @@ export const DISTRICT_APPROX_COORDS: Record<string, { lat: number; lng: number }
   'Villa El Salvador': { lat: -12.2125, lng: -76.9394 },
   'San Borja': { lat: -12.0942, lng: -76.9996 },
   'La Victoria': { lat: -12.0672, lng: -77.0186 },
-  Independencia: { lat: -11.9904, lng: -77.0542 }
+  Independencia: { lat: -11.9904, lng: -77.0542 },
+  Chorrillos: { lat: -12.1695, lng: -77.0181 }
 };
 
 export const DEMO_SOCIAL_POSTS: SocialPost[] = [
   {
     id: 'SOC-DEMO-01',
     platform: 'x',
+    source: 'x',
     externalPostId: 'demo-x-189001',
     postUrl: 'https://x.com/i/web/status/189001',
     text: '[Datos de demostración] Vecinos reportan asalto al paso en paradero cercano al óvalo en Los Olivos. Recomiendan esperar transporte en zona iluminada.',
     publishedAt: '2026-11-19T15:20:00Z',
     importedAt: '2026-11-19T15:25:00Z',
-    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    queryUsed: '(robo OR asalto OR extorsion OR inseguridad) ("Los Olivos" OR Callao OR "San Juan de Lurigancho") lang:es -is:retweet',
     status: 'Pendiente de validación',
+    state: 'pending_validation',
     suggestedCategory: 'asalto',
     suggestedRiskLevel: 'alto',
     suggestedDistrict: 'Los Olivos',
+    detectedDistrict: 'Los Olivos',
     isDemo: true
   },
   {
     id: 'SOC-DEMO-02',
     platform: 'x',
+    source: 'x',
     externalPostId: 'demo-x-189002',
     postUrl: 'https://x.com/i/web/status/189002',
     text: '[Datos de demostración] Congestión vehicular fuerte por accidente leve en cruce principal del Callao. Unidades de auxilio ya en camino.',
-    publishedAt: '2026-11-19T14:10:00Z',
-    importedAt: '2026-11-19T14:15:00Z',
-    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    publishedAt: '2026-11-18T14:10:00Z',
+    importedAt: '2026-11-18T14:15:00Z',
+    queryUsed: '(robo OR asalto OR extorsion OR inseguridad) ("Los Olivos" OR Callao OR "San Juan de Lurigancho") lang:es -is:retweet',
     status: 'Pendiente de validación',
+    state: 'pending_validation',
     suggestedCategory: 'accidente',
     suggestedRiskLevel: 'medio',
     suggestedDistrict: 'Callao',
+    detectedDistrict: 'Callao',
     isDemo: true
   },
   {
     id: 'SOC-DEMO-03',
     platform: 'x',
+    source: 'x',
     externalPostId: 'demo-x-189003',
     postUrl: 'https://x.com/i/web/status/189003',
     text: '[Datos de demostración] Comerciantes alertan sobre mensajes de extorsión en zona comercial de San Juan de Lurigancho. Piden mayor patrullaje preventivo.',
-    publishedAt: '2026-11-19T11:45:00Z',
-    importedAt: '2026-11-19T11:50:00Z',
-    queryUsed: 'robo OR asalto OR extorsión OR inseguridad lang:es',
+    publishedAt: '2026-11-17T11:45:00Z',
+    importedAt: '2026-11-17T11:50:00Z',
+    queryUsed: '(robo OR asalto OR extorsion OR inseguridad) ("Los Olivos" OR Callao OR "San Juan de Lurigancho") lang:es -is:retweet',
     status: 'Pendiente de validación',
+    state: 'pending_validation',
     suggestedCategory: 'extorsion',
     suggestedRiskLevel: 'alto',
     suggestedDistrict: 'San Juan de Lurigancho',
+    detectedDistrict: 'San Juan de Lurigancho',
+    isDemo: true
+  },
+  {
+    id: 'SOC-DEMO-04',
+    platform: 'x',
+    source: 'x',
+    externalPostId: 'demo-x-189004',
+    postUrl: 'https://x.com/i/web/status/189004',
+    text: '[Datos de demostración] Publicación genérica sobre inseguridad sin precisar distrito ni referencia en Lima o Callao.',
+    publishedAt: '2026-11-16T09:30:00Z',
+    importedAt: '2026-11-16T09:35:00Z',
+    queryUsed: '(robo OR asalto OR extorsion OR inseguridad) lang:es -is:retweet',
+    status: 'Descartado',
+    state: 'discarded',
+    suggestedCategory: 'actividad_sospechosa',
+    suggestedRiskLevel: 'informativo',
+    suggestedDistrict: 'Sin distrito',
+    detectedDistrict: 'Sin distrito',
+    moderatorName: 'Filtro automático Lima/Callao',
+    reviewReason: 'No identifica un distrito permitido de Lima Metropolitana o Callao.',
+    reviewedAt: '2026-11-16T09:35:00Z',
     isDemo: true
   }
 ];

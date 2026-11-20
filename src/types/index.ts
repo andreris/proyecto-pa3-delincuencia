@@ -41,6 +41,7 @@ export type SocialPostStatus = 'Pendiente de validación' | 'Verificado' | 'Desc
 export interface SocialPost {
   id: string;
   platform: 'x';
+  source?: 'x';
   externalPostId: string;
   postUrl: string;
   text: string;
@@ -49,9 +50,11 @@ export interface SocialPost {
   authorUsername?: string;
   queryUsed: string;
   status: SocialPostStatus;
+  state?: 'pending_validation' | 'verified' | 'discarded';
   suggestedCategory: IncidentCategory;
   suggestedRiskLevel: RiskLevel;
   suggestedDistrict?: string;
+  detectedDistrict?: string;
   moderatorId?: string;
   moderatorName?: string;
   reviewReason?: string;

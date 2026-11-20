@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import { DatabaseAdapter, SqlParam } from './types.js';
-import { SCHEMA_STATEMENTS } from './schema.js';
+import { CONFIG_COLUMN_MIGRATIONS, SCHEMA_STATEMENTS } from './schema.js';
 
 function toPostgresPlaceholders(sql: string): string {
   let index = 0;
@@ -26,6 +26,13 @@ export class PostgresAdapter implements DatabaseAdapter {
   async init(): Promise<void> {
     for (const stmt of SCHEMA_STATEMENTS) {
       await this.pool.query(stmt);
+    }
+    for (const alterStmt of CONFIG_COLUMN_MIGRATIONS) {
+      try {
+        await this.pool.query(alterStmt.replace('ADD COLUMN ', 'ADD COLUMN IF NOT EXISTS '));
+      } catch {
+        // Ignore if column already exists
+      }
     }
   }
 
