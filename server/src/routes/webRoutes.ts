@@ -2,7 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { DatabaseAdapter } from '../db/types.js';
 import { AuthenticatedRequest, requireAuth, requireModerator } from '../middleware/auth.js';
-import { listAuditLogs } from '../services/auditService.js';
+import { listAuditLogs, recordAuditLog } from '../services/auditService.js';
 import {
   getOrCreateWebConfig,
   clearAutomaticWebDiscardedNews,
