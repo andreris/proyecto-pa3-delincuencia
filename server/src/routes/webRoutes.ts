@@ -5,6 +5,7 @@ import { AuthenticatedRequest, requireAuth, requireModerator } from '../middlewa
 import { listAuditLogs } from '../services/auditService.js';
 import {
   getOrCreateWebConfig,
+  clearAutomaticWebDiscardedNews,
   getWebNewsStats,
   listWebNews,
   reviewWebNewsItem,
@@ -390,6 +391,32 @@ export function createWebRouter(db: DatabaseAdapter, webService: WebService): Ro
           return;
         }
         res.status(500).json({ error: 'No se pudo completar la revisión de la noticia.' });
+      }
+    }
+  );
+
+  // Moderator-only: clear legacy automatic RSS rejections after filter-rule updates.
+  router.delete(
+    '/news/automatic-discarded',
+    requireAuth,
+    requireModerator,
+    moderationLimiter,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const removed = await clearAutomaticWebDiscardedNews(db);
+        await recordAuditLog(db, {
+          actionType: 'web_filters_updated',
+          actorId: req.authUser!.uid,
+          actorName: req.authUser!.name,
+          actorRole: req.authUser!.role,
+          targetType: 'web_config',
+          targetId: 'rpp-default',
+          details: `Limpieza de descartes automáticos RSS: ${removed} noticias eliminadas.`
+        });
+        res.json({ removed, stats: await getWebNewsStats(db) });
+      } catch (err) {
+        console.error('[web/automatic-discarded] Error:', err);
+        res.status(500).json({ error: 'No se pudieron limpiar los descartes automáticos.' });
       }
     }
   );

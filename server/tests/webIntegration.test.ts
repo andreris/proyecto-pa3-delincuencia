@@ -366,22 +366,19 @@ test('Caso 4 y 5: Lima con distrito aceptada en Pendiente, Callao/extranjero/reg
       result: {
         importedCount: number;
         discardedCount: number;
+        omittedCount: number;
         discardReasons: string[];
         importedNews: WebNewsRecord[];
-        discardedNews: WebNewsRecord[];
       };
     };
 
     assert.equal(data.result.importedCount, 1);
-    assert.equal(data.result.discardedCount, 3);
+    assert.equal(data.result.discardedCount, 0);
+    assert.equal(data.result.omittedCount, 3);
     assert.equal(data.result.importedNews[0].district, 'San Juan de Lurigancho');
     assert.equal(data.result.importedNews[0].status, 'Pendiente de validación');
     assert.equal(data.result.importedNews[0].locationStatus, 'district_only');
-    assert.equal(
-      data.result.discardedNews.every(n => n.status === 'Descartado'),
-      true
-    );
-    assert.equal(data.result.discardReasons.length >= 2, true);
+    assert.equal(data.result.discardReasons.length, 0);
 
     // Check audit log entries
     const auditRes = await fetch(`${baseUrl}/api/web/audit`, {
@@ -450,10 +447,11 @@ test('Caso 6: Filtro por rango de fechas en sincronización y listado web', asyn
     });
     assert.equal(syncRes.status, 200);
     const data = (await syncRes.json()) as {
-      result: { importedCount: number; discardedCount: number; importedNews: WebNewsRecord[] };
+      result: { importedCount: number; discardedCount: number; omittedCount: number; importedNews: WebNewsRecord[] };
     };
     assert.equal(data.result.importedCount, 1);
-    assert.equal(data.result.discardedCount, 1);
+    assert.equal(data.result.discardedCount, 0);
+    assert.equal(data.result.omittedCount, 1);
     assert.equal(data.result.importedNews[0].originalUrl.includes('nov19'), true);
   } finally {
     if (originalCooldown === undefined) delete process.env.WEB_SYNC_COOLDOWN_MINUTES;

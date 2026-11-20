@@ -53,9 +53,12 @@ export interface WebSyncResult {
   fetchedCount: number;
   importedCount: number;
   discardedCount: number;
+  /** Items that did not qualify for moderation. They are audited but not persisted. */
+  omittedCount: number;
   duplicatesSkipped: number;
   capSkippedCount: number;
   discardReasons: string[];
+  omissionReasons: string[];
   maxNewsLimit: number;
   cooldownMinutes: number;
   nextAllowedSyncAt: string;
@@ -288,10 +291,14 @@ export class WebService {
         uniqueNewItems.push(item);
       }
 
-      // Evaluate each unique item and enforce strict hard cap of 20 newly imported items
+      // Evaluate each unique item and enforce strict hard cap of 20 newly imported items.
+      // RSS is a general RPP feed; irrelevant articles are deliberately *omitted*, not
+      // persisted as rejected moderation records. This keeps the queue meaningful.
       const evaluatedToPersist: EvaluatedWebNewsInput[] = [];
       let acceptedCount = 0;
       let capSkippedCount = 0;
+      let omittedCount = 0;
+      const omissionReasons = new Set<string>();
 
       for (const item of uniqueNewItems) {
         const outcome = await validateAndGeolocateWebNews({
@@ -333,26 +340,8 @@ export class WebService {
             status: 'Pendiente de validación'
           });
         } else {
-          evaluatedToPersist.push({
-            externalId: item.externalId,
-            title: item.title,
-            excerpt: item.excerpt,
-            publishedAt: item.publishedAt,
-            originalUrl: item.originalUrl,
-            imageUrl: item.imageUrl,
-            suggestedCategory: outcome.suggestedCategory,
-            suggestedRiskLevel: outcome.suggestedRiskLevel,
-            district: outcome.detectedDistrict,
-            latitude: null,
-            longitude: null,
-            locationLabel: null,
-            locationConfidence: outcome.locationConfidence,
-            locationStatus: outcome.locationStatus,
-            locationSource: outcome.locationSource,
-            isLimaValidated: false,
-            status: 'Descartado',
-            reviewReason: outcome.discardReason
-          });
+          omittedCount += 1;
+          if (outcome.discardReason) omissionReasons.add(outcome.discardReason);
         }
       }
 
@@ -375,7 +364,7 @@ export class WebService {
         new Date(syncTimestamp).getTime() + cooldownState.cooldownMinutes * 60 * 1000
       ).toISOString();
 
-      const message = `Sincronización RPP Noticias completada: ${parsedItems.length} leídas, ${imported.length} importadas en revisión (máx. ${HARD_MAX_WEB_NEWS_PER_SYNC}), ${discarded.length} descartadas automáticamente, ${totalDuplicatesSkipped} duplicadas omitidas${capSkippedCount > 0 ? `, ${capSkippedCount} omitidas por límite de 20` : ''}.`;
+      const message = `Sincronización RPP Noticias completada: ${parsedItems.length} leídas, ${imported.length} importadas en revisión (máx. ${HARD_MAX_WEB_NEWS_PER_SYNC}), ${omittedCount} omitidas por filtros, ${totalDuplicatesSkipped} duplicadas omitidas${capSkippedCount > 0 ? `, ${capSkippedCount} omitidas por límite de 20` : ''}.`;
 
       await updateWebSyncMetadata(db, {
         lastSyncAt: syncTimestamp,
@@ -399,7 +388,7 @@ export class WebService {
         actorRole: moderator.role,
         targetType: 'web_config',
         targetId: 'rpp-default',
-        details: `Fuente: RPP Noticias (${rssUrl}) • Fecha: ${syncTimestamp} • ${message} • Filtros activos: [${activeFiltersSummary}]${discardReasons.length > 0 ? ` • Motivos de descarte: ${discardReasons.join(' | ')}` : ''}`
+        details: `Fuente: RPP Noticias (${rssUrl}) • Fecha: ${syncTimestamp} • ${message} • Filtros activos: [${activeFiltersSummary}]${omissionReasons.size > 0 ? ` • Motivos de omisión: ${Array.from(omissionReasons).join(' | ')}` : ''}`
       });
 
       return {
@@ -408,9 +397,11 @@ export class WebService {
         fetchedCount: parsedItems.length,
         importedCount: imported.length,
         discardedCount: discarded.length,
+        omittedCount,
         duplicatesSkipped: totalDuplicatesSkipped,
         capSkippedCount,
         discardReasons,
+        omissionReasons: Array.from(omissionReasons),
         maxNewsLimit: HARD_MAX_WEB_NEWS_PER_SYNC,
         cooldownMinutes: cooldownState.cooldownMinutes,
         nextAllowedSyncAt,

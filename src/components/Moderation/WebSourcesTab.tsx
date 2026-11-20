@@ -9,6 +9,7 @@ import {
 } from '../../data/demoData';
 import {
   ApiClientError,
+  clearAutomaticWebDiscardedNews,
   fetchWebAuditLogs,
   fetchWebNews,
   fetchWebStatus,
@@ -857,6 +858,22 @@ export const WebSourcesTab: React.FC = () => {
     }
   };
 
+  const handleClearAutomaticDiscarded = async () => {
+    if (!backendAvailable || !isModeratorAuthenticated) return;
+    if (!window.confirm('¿Eliminar los descartes automáticos anteriores del RSS? Los descartes hechos manualmente se conservarán.')) return;
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const result = await clearAutomaticWebDiscardedNews(currentUser);
+      await loadBackendWebData();
+      setSuccessMsg(`${result.removed} descartes automáticos antiguos fueron eliminados.`);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'No se pudieron limpiar los descartes automáticos.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Local filtering for demo mode (or matching backend-filtered items)
   const filteredNews = useMemo(() => {
     return newsItems.filter(item => {
@@ -1528,6 +1545,15 @@ export const WebSourcesTab: React.FC = () => {
           >
             Descartadas ({discardedNewsCount})
           </button>
+          {backendAvailable && isModeratorAuthenticated && discardedNewsCount > 0 && (
+            <button
+              onClick={handleClearAutomaticDiscarded}
+              className="px-3 py-1 rounded-lg font-bold bg-white border border-red-200 text-red-700 hover:bg-red-50"
+              title="Elimina solo descartes automáticos anteriores; conserva los descartes humanos"
+            >
+              Limpiar automáticas
+            </button>
+          )}
         </div>
       </div>
 

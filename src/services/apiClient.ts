@@ -637,9 +637,11 @@ export async function triggerRppSync(
     fetchedCount: number;
     importedCount: number;
     discardedCount: number;
+    omittedCount: number;
     duplicatesSkipped: number;
     capSkippedCount?: number;
     discardReasons: string[];
+    omissionReasons: string[];
     maxNewsLimit: number;
     cooldownMinutes: number;
     nextAllowedSyncAt: string;
@@ -661,9 +663,11 @@ export async function triggerRppSync(
       fetchedCount: number;
       importedCount: number;
       discardedCount: number;
+      omittedCount: number;
       duplicatesSkipped: number;
       capSkippedCount?: number;
       discardReasons: string[];
+      omissionReasons: string[];
       maxNewsLimit: number;
       cooldownMinutes: number;
       nextAllowedSyncAt: string;
@@ -687,6 +691,23 @@ export async function triggerRppSync(
     result: data.result,
     stats: data.stats
   };
+}
+
+export async function clearAutomaticWebDiscardedNews(
+  user: UserProfile | null
+): Promise<{ removed: number; stats: WebStatusResponse['stats'] }> {
+  const res = await authorizedFetch('/api/web/news/automatic-discarded', user, {
+    method: 'DELETE'
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    removed?: number;
+    stats?: WebStatusResponse['stats'];
+    error?: string;
+  };
+  if (!res.ok || !data.stats) {
+    throw new ApiClientError(data.error || 'No se pudieron limpiar los descartes automáticos.', res.status);
+  }
+  return { removed: data.removed || 0, stats: data.stats };
 }
 
 export async function fetchWebNews(

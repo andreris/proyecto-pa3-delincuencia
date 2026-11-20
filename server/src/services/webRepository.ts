@@ -618,6 +618,16 @@ export async function getWebNewsStats(
   return counts;
 }
 
+/** Removes only automatic RSS rejections, preserving anything a moderator discarded manually. */
+export async function clearAutomaticWebDiscardedNews(db: DatabaseAdapter): Promise<number> {
+  const result = await db.execute(
+    `DELETE FROM web_news
+     WHERE status = 'Descartado'
+       AND moderator_name = 'Filtro automático Lima Metropolitana (RSS)'`
+  );
+  return Number(result.changes || 0);
+}
+
 export interface ReviewWebNewsPayload {
   action:
     | 'approve_and_publish'
