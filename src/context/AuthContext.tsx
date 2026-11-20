@@ -1,12 +1,30 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, UserType } from '../types';
+import {
+  ApiClientError,
+  authenticateModeratorSession,
+  clearBackendSession
+} from '../services/apiClient';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
   isAuthenticated: boolean;
   isModerator: boolean;
+  isModeratorAuthenticated: boolean;
+  isModeratorModalOpen: boolean;
+  openModeratorModal: () => void;
+  closeModeratorModal: () => void;
+  activateModeratorWithCode: (
+    code: string
+  ) => Promise<{ success: boolean; error?: string }>;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  register: (name: string, email: string, pass: string, district: string, userType: UserType) => Promise<{ success: boolean; error?: string }>;
+  register: (
+    name: string,
+    email: string,
+    pass: string,
+    district: string,
+    userType: UserType
+  ) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   updateProfile: (updates: Partial<UserProfile>) => void;
   resetPassword: (email: string) => Promise<{ success: boolean; message: string }>;
@@ -31,34 +49,92 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
     try {
       const saved = localStorage.getItem('vigila_pe_user');
-      return saved ? JSON.parse(saved) : DEFAULT_USER;
+      if (!saved) return DEFAULT_USER;
+      const parsed = JSON.parse(saved) as UserProfile;
+      // Never auto-restore moderator role from localStorage without fresh code verification
+      return parsed.role === 'moderator' ? { ...parsed, role: 'user' } : parsed;
     } catch {
       return DEFAULT_USER;
     }
   });
 
+  const [isModeratorAuthenticated, setIsModeratorAuthenticated] = useState<boolean>(false);
+  const [isModeratorModalOpen, setIsModeratorModalOpen] = useState<boolean>(false);
+
   useEffect(() => {
     if (currentUser) {
-      localStorage.setItem('vigila_pe_user', JSON.stringify(currentUser));
+      // Never persist moderator privilege or access codes in localStorage
+      const safeToPersist: UserProfile = {
+        ...currentUser,
+        role: 'user'
+      };
+      localStorage.setItem('vigila_pe_user', JSON.stringify(safeToPersist));
     } else {
       localStorage.removeItem('vigila_pe_user');
     }
   }, [currentUser]);
 
-  const login = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
+  const openModeratorModal = () => {
+    setIsModeratorModalOpen(true);
+  };
+
+  const closeModeratorModal = () => {
+    setIsModeratorModalOpen(false);
+  };
+
+  const activateModeratorWithCode = async (
+    moderatorCode: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const trimmedCode = moderatorCode.trim();
+    if (!trimmedCode) {
+      return { success: false, error: 'Ingresa el código de acceso de moderador.' };
+    }
+
+    try {
+      const session = await authenticateModeratorSession(currentUser, trimmedCode);
+      setIsModeratorAuthenticated(true);
+      setCurrentUser(prev => ({
+        uid: session.user.uid || prev?.uid || 'mod-session-01',
+        name: prev?.name || session.user.name || 'Moderador Vigila.pe',
+        email: prev?.email || session.user.email || 'moderacion@vigila.pe',
+        district: prev?.district || 'Lima (Cercado)',
+        userType: prev?.userType || 'peaton',
+        role: 'moderator',
+        avatarInitials: prev?.avatarInitials || 'MV',
+        joinedDate: prev?.joinedDate || new Date().toISOString().split('T')[0]
+      }));
+      setIsModeratorModalOpen(false);
+      return { success: true };
+    } catch (err) {
+      setIsModeratorAuthenticated(false);
+      if (err instanceof ApiClientError && err.status === 403) {
+        return { success: false, error: 'Código de moderador inválido' };
+      }
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'No se pudo verificar el código de moderador con el servidor.';
+      return { success: false, error: message };
+    }
+  };
+
+  const login = async (
+    email: string,
+    pass: string
+  ): Promise<{ success: boolean; error?: string }> => {
     if (!email || !pass) {
       return { success: false, error: 'Por favor ingresa correo y contraseña.' };
     }
-    // Simulate auth validation
+    clearBackendSession();
+    setIsModeratorAuthenticated(false);
     const initials = email.split('@')[0].slice(0, 2).toUpperCase();
-    const isMod = email.includes('admin') || email.includes('mod');
     const newUser: UserProfile = {
       uid: 'usr-' + Date.now().toString(36),
       name: email.split('@')[0].replace('.', ' '),
       email,
       district: 'Miraflores',
       userType: 'peaton',
-      role: isMod ? 'moderator' : 'user',
+      role: 'user',
       avatarInitials: initials || 'VG',
       joinedDate: new Date().toISOString().split('T')[0]
     };
@@ -80,6 +156,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
     }
 
+    clearBackendSession();
+    setIsModeratorAuthenticated(false);
     const initials = name
       .split(' ')
       .filter(Boolean)
@@ -102,6 +180,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    clearBackendSession();
+    setIsModeratorAuthenticated(false);
     setCurrentUser(null);
   };
 
@@ -109,7 +189,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(prev => (prev ? { ...prev, ...updates } : null));
   };
 
-  const resetPassword = async (email: string): Promise<{ success: boolean; message: string }> => {
+  const resetPassword = async (
+    email: string
+  ): Promise<{ success: boolean; message: string }> => {
     if (!email || !email.includes('@')) {
       return { success: false, message: 'Ingresa un correo electrónico válido.' };
     }
@@ -120,26 +202,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const toggleModeratorRole = () => {
-    setCurrentUser(prev => {
-      if (!prev) return DEFAULT_USER;
-      const nextRole = prev.role === 'moderator' ? 'user' : 'moderator';
-      return { ...prev, role: nextRole };
-    });
+    if (isModeratorAuthenticated) {
+      clearBackendSession();
+      setIsModeratorAuthenticated(false);
+      setCurrentUser(prev => (prev ? { ...prev, role: 'user' } : DEFAULT_USER));
+      return;
+    }
+    openModeratorModal();
   };
 
   const switchUserPersona = (type: UserType | 'moderador') => {
     if (type === 'moderador') {
-      setCurrentUser({
-        uid: 'mod-demo-01',
-        name: 'Oficial María Huamán',
-        email: 'moderacion@vigila.pe',
-        district: 'Lima (Cercado)',
-        userType: 'peaton',
-        role: 'moderator',
-        avatarInitials: 'MH',
-        joinedDate: '2024-09-01'
-      });
-    } else if (type === 'conductor') {
+      // Always prompt for MODERATOR_ACCESS_CODE modal instead of direct elevation
+      openModeratorModal();
+      return;
+    }
+
+    clearBackendSession();
+    setIsModeratorAuthenticated(false);
+
+    if (type === 'conductor') {
       setCurrentUser({
         uid: 'usr-cond-02',
         name: 'Jorge Quispe Cárdenas',
@@ -175,12 +257,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const isModerator = Boolean(
+    isModeratorAuthenticated && currentUser?.role === 'moderator'
+  );
+
   return (
     <AuthContext.Provider
       value={{
         currentUser,
         isAuthenticated: !!currentUser,
-        isModerator: currentUser?.role === 'moderator',
+        isModerator,
+        isModeratorAuthenticated,
+        isModeratorModalOpen,
+        openModeratorModal,
+        closeModeratorModal,
+        activateModeratorWithCode,
         login,
         register,
         logout,

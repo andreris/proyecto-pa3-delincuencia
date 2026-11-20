@@ -33,7 +33,9 @@ async function startTestServer(fetchMock?: FetchLike) {
 
 test('Deduplicación por external_post_id y sanitización en sincronización X API v2', async () => {
   const originalToken = process.env.X_BEARER_TOKEN;
+  const originalCooldown = process.env.X_SYNC_COOLDOWN_MINUTES;
   process.env.X_BEARER_TOKEN = 'test-bearer-token-only-in-server';
+  process.env.X_SYNC_COOLDOWN_MINUTES = '0';
 
   let callCount = 0;
   const mockFetch: FetchLike = async () => {
@@ -106,6 +108,8 @@ test('Deduplicación por external_post_id y sanitización en sincronización X A
   } finally {
     if (originalToken === undefined) delete process.env.X_BEARER_TOKEN;
     else process.env.X_BEARER_TOKEN = originalToken;
+    if (originalCooldown === undefined) delete process.env.X_SYNC_COOLDOWN_MINUTES;
+    else process.env.X_SYNC_COOLDOWN_MINUTES = originalCooldown;
     await close();
   }
 });
@@ -305,6 +309,173 @@ test('Sirve dist/index.html para rutas SPA sin interceptar rutas /api', async ()
     const html = await spaRes.text();
     assert.ok(html.includes('<div id="root"></div>'));
   } finally {
+    await close();
+  }
+});
+
+test('Límite estricto X: máximo 10 posts, una sola solicitud sin paginación y bloqueo de 60 minutos', async () => {
+  const originalToken = process.env.X_BEARER_TOKEN;
+  const originalMaxPosts = process.env.X_SYNC_MAX_POSTS;
+  const originalCooldown = process.env.X_SYNC_COOLDOWN_MINUTES;
+  process.env.X_BEARER_TOKEN = 'test-bearer-token-limits';
+  // Even if someone tries to configure > 10, server strictly caps at 10
+  process.env.X_SYNC_MAX_POSTS = '50';
+  process.env.X_SYNC_COOLDOWN_MINUTES = '60';
+
+  const requestedUrls: string[] = [];
+  const mockFetch: FetchLike = async input => {
+    requestedUrls.push(String(input));
+    // Simulate upstream returning 15 tweets AND a next_token pagination cursor
+    const data = Array.from({ length: 15 }, (_, idx) => ({
+      id: `1950000000${String(idx + 1).padStart(2, '0')}`,
+      text: `Reporte ciudadano #${idx + 1} de robo en Lima Cercado.`,
+      created_at: '2026-11-19T15:00:00.000Z',
+      lang: 'es'
+    }));
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        data,
+        meta: {
+          result_count: 15,
+          next_token: 'NEXT_PAGE_SHOULD_NOT_BE_FETCHED'
+        }
+      })
+    };
+  };
+
+  const { baseUrl, close } = await startTestServer(mockFetch);
+
+  try {
+    const modToken = issueSessionToken({
+      uid: 'mod-limits',
+      name: 'Moderador Limites',
+      email: 'moderacion@vigila.pe',
+      role: 'moderator'
+    });
+
+    // First sync succeeds: strictly 1 X API call, max_results=10, and <= 10 imported
+    const firstSyncRes = await fetch(`${baseUrl}/api/social/x/sync`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${modToken}` }
+    });
+    assert.equal(firstSyncRes.status, 200);
+    const firstJson = (await firstSyncRes.json()) as {
+      result: {
+        fetchedCount: number;
+        importedCount: number;
+        maxPostsLimit: number;
+        nextAllowedSyncAt: string;
+      };
+    };
+
+    // (b) Single request / single page only, with max_results=10 and no next_token
+    assert.equal(requestedUrls.length, 1);
+    const parsedUrl = new URL(requestedUrls[0]);
+    assert.equal(parsedUrl.searchParams.get('max_results'), '10');
+    assert.equal(parsedUrl.searchParams.get('next_token'), null);
+
+    // (a) Strict max 10 posts imported/returned
+    assert.equal(firstJson.result.maxPostsLimit, 10);
+    assert.equal(firstJson.result.fetchedCount, 10);
+    assert.equal(firstJson.result.importedCount, 10);
+    assert.ok(firstJson.result.nextAllowedSyncAt);
+
+    // (c) Immediate second sync within 60 minutes is blocked with 429 and clear message
+    const secondSyncRes = await fetch(`${baseUrl}/api/social/x/sync`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${modToken}` }
+    });
+    assert.equal(secondSyncRes.status, 429);
+    const secondJson = (await secondSyncRes.json()) as {
+      code: string;
+      error: string;
+      nextAllowedSyncAt: string;
+    };
+    assert.equal(secondJson.code, 'X_SYNC_COOLDOWN');
+    assert.ok(secondJson.error.includes('60 minutos'));
+    assert.ok(secondJson.nextAllowedSyncAt);
+    // Ensure X API was NOT called a second time during cooldown
+    assert.equal(requestedUrls.length, 1);
+  } finally {
+    if (originalToken === undefined) delete process.env.X_BEARER_TOKEN;
+    else process.env.X_BEARER_TOKEN = originalToken;
+    if (originalMaxPosts === undefined) delete process.env.X_SYNC_MAX_POSTS;
+    else process.env.X_SYNC_MAX_POSTS = originalMaxPosts;
+    if (originalCooldown === undefined) delete process.env.X_SYNC_COOLDOWN_MINUTES;
+    else process.env.X_SYNC_COOLDOWN_MINUTES = originalCooldown;
+    await close();
+  }
+});
+
+test('Autorización de moderador con código MODERATOR_ACCESS_CODE en POST /api/auth/session', async () => {
+  const originalCode = process.env.MODERATOR_ACCESS_CODE;
+  process.env.MODERATOR_ACCESS_CODE = 'VIGILA-MOD-TEST-99';
+
+  const { baseUrl, close } = await startTestServer();
+
+  try {
+    // Missing or wrong code -> 403 "Código de moderador inválido"
+    const invalidRes = await fetch(`${baseUrl}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: 'usr-100',
+        name: 'Usuario Común',
+        email: 'usuario@vigila.pe',
+        role: 'moderator',
+        moderatorCode: 'CODIGO-INCORRECTO'
+      })
+    });
+    assert.equal(invalidRes.status, 403);
+    const invalidJson = (await invalidRes.json()) as { error: string };
+    assert.equal(invalidJson.error, 'Código de moderador inválido');
+
+    // Empty code -> 403
+    const emptyRes = await fetch(`${baseUrl}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: 'usr-100',
+        name: 'Usuario Común',
+        email: 'moderacion@vigila.pe',
+        role: 'moderator'
+      })
+    });
+    assert.equal(emptyRes.status, 403);
+
+    // Valid MODERATOR_ACCESS_CODE -> 200 + token accepted on protected /api/social/status
+    const validRes = await fetch(`${baseUrl}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: 'usr-100',
+        name: 'Moderador Autorizado',
+        email: 'usuario@vigila.pe',
+        role: 'moderator',
+        moderatorCode: 'VIGILA-MOD-TEST-99'
+      })
+    });
+    assert.equal(validRes.status, 200);
+    const validJson = (await validRes.json()) as {
+      token: string;
+      user: { role: string };
+    };
+    assert.equal(validJson.user.role, 'moderator');
+    assert.ok(validJson.token);
+
+    const statusRes = await fetch(`${baseUrl}/api/social/status`, {
+      headers: { Authorization: `Bearer ${validJson.token}` }
+    });
+    assert.equal(statusRes.status, 200);
+    const statusJson = (await statusRes.json()) as { maxPostsPerSync: number; cooldownMinutes: number };
+    assert.equal(statusJson.maxPostsPerSync, 10);
+    assert.equal(statusJson.cooldownMinutes, 60);
+  } finally {
+    if (originalCode === undefined) delete process.env.MODERATOR_ACCESS_CODE;
+    else process.env.MODERATOR_ACCESS_CODE = originalCode;
     await close();
   }
 });

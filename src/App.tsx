@@ -11,6 +11,7 @@ import { ProfileView } from './components/Profile/ProfileView';
 import { ReportIncidentModal } from './components/Report/ReportIncidentModal';
 import { SosModal } from './components/SOS/SosModal';
 import { AuthModal } from './components/Auth/AuthModal';
+import { ModeratorAuthModal } from './components/Auth/ModeratorAuthModal';
 import { MobileAppShell } from './components/MobileApp/MobileAppShell';
 import { PWAInstallButton } from './components/PWA/PWAInstallButton';
 import { OfflineIndicator } from './components/PWA/OfflineIndicator';
@@ -195,6 +196,8 @@ function MainApp() {
         onClose={() => setIsAuthModalOpen(false)}
         initialMode={authModalMode}
       />
+
+      <ModeratorAuthModal />
 
       {/* Offline Connectivity Toast */}
       <OfflineIndicator />

@@ -206,12 +206,28 @@ export async function updateSyncMetadata(
   }
 ): Promise<void> {
   await getOrCreateSocialConfig(db);
+  if (meta.lastSyncStatus === 'success') {
+    await db.execute(
+      `UPDATE social_configs
+       SET last_sync_at = ?, last_sync_status = ?, last_sync_message = ?, last_imported_count = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        meta.lastSyncAt,
+        meta.lastSyncStatus,
+        meta.lastSyncMessage,
+        meta.lastImportedCount,
+        meta.lastSyncAt,
+        'x-default'
+      ]
+    );
+    return;
+  }
+
   await db.execute(
     `UPDATE social_configs
-     SET last_sync_at = ?, last_sync_status = ?, last_sync_message = ?, last_imported_count = ?, updated_at = ?
+     SET last_sync_status = ?, last_sync_message = ?, last_imported_count = ?, updated_at = ?
      WHERE id = ?`,
     [
-      meta.lastSyncAt,
       meta.lastSyncStatus,
       meta.lastSyncMessage,
       meta.lastImportedCount,

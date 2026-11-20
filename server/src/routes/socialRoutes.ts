@@ -13,10 +13,14 @@ import {
   updateSocialConfig
 } from '../services/socialRepository.js';
 import {
+  computeNextAllowedSync,
+  getSyncMaxPosts,
   SyncConflictError,
   XConfigurationError,
+  XCreditsError,
   XRateLimitError,
-  XService
+  XService,
+  XSyncCooldownError
 } from '../services/xService.js';
 import { SocialPostStatus } from '../types.js';
 
@@ -52,11 +56,17 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
       try {
         const config = await getOrCreateSocialConfig(db);
         const stats = await getSocialPostStats(db);
+        const cooldown = computeNextAllowedSync(config.lastSyncAt);
         res.json({
           xConfigured: xService.isTokenConfigured(),
           isSyncing: xService.isSyncInProgress(),
           searchQuery: config.searchQuery,
           retentionDays: config.retentionDays,
+          maxPostsPerSync: getSyncMaxPosts(),
+          cooldownMinutes: cooldown.cooldownMinutes,
+          canSyncNow: cooldown.canSyncNow,
+          nextAllowedSyncAt: cooldown.nextAllowedSyncAt,
+          retryAfterSeconds: cooldown.retryAfterSeconds,
           lastSyncAt: config.lastSyncAt,
           lastSyncStatus: config.lastSyncStatus || 'idle',
           lastSyncMessage: config.lastSyncMessage,
@@ -124,10 +134,26 @@ export function createSocialRouter(db: DatabaseAdapter, xService: XService): Rou
           res.status(409).json({ error: err.message });
           return;
         }
+        if (err instanceof XSyncCooldownError) {
+          res.status(429).json({
+            error: err.message,
+            code: 'X_SYNC_COOLDOWN',
+            nextAllowedSyncAt: err.nextAllowedSyncAt,
+            retryAfterSeconds: err.retryAfterSeconds
+          });
+          return;
+        }
         if (err instanceof XConfigurationError) {
           res.status(503).json({
             error: err.message,
             code: 'X_TOKEN_MISSING'
+          });
+          return;
+        }
+        if (err instanceof XCreditsError) {
+          res.status(402).json({
+            error: err.message,
+            code: 'X_CREDITS_DEPLETED'
           });
           return;
         }

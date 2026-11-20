@@ -8,8 +8,56 @@ import {
   UserProfile
 } from '../types';
 
-const RAW_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim();
-export const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
+const metaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+const RAW_BASE_URL = (metaEnv?.VITE_API_BASE_URL || '').trim();
+
+/**
+ * Normalizes VITE_API_BASE_URL so same-origin setups like "", "/", or "/api"
+ * produce clean "/api/..." routes without ever generating "/api/api/...".
+ */
+export function normalizeApiBaseUrl(rawBase?: string): string {
+  const trimmed = (rawBase ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed || trimmed === '/' || trimmed === '/api') {
+    return '';
+  }
+  if (trimmed.endsWith('/api')) {
+    return trimmed.slice(0, -4);
+  }
+  return trimmed;
+}
+
+export const API_BASE_URL = normalizeApiBaseUrl(RAW_BASE_URL);
+
+export function buildApiUrl(path: string, baseOverride?: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const base =
+    baseOverride !== undefined ? normalizeApiBaseUrl(baseOverride) : API_BASE_URL;
+  return base ? `${base}${normalizedPath}` : normalizedPath;
+}
+
+export class ApiClientError extends Error {
+  public readonly status: number;
+  public readonly code?: string;
+  public readonly nextAllowedSyncAt?: string;
+  public readonly retryAfterSeconds?: number;
+
+  constructor(
+    message: string,
+    status: number,
+    options?: {
+      code?: string;
+      nextAllowedSyncAt?: string;
+      retryAfterSeconds?: number;
+    }
+  ) {
+    super(message);
+    this.name = 'ApiClientError';
+    this.status = status;
+    this.code = options?.code;
+    this.nextAllowedSyncAt = options?.nextAllowedSyncAt;
+    this.retryAfterSeconds = options?.retryAfterSeconds;
+  }
+}
 
 export interface BackendHealth {
   ok: boolean;
@@ -25,6 +73,11 @@ export interface SocialStatusResponse {
   isSyncing: boolean;
   searchQuery: string;
   retentionDays: number;
+  maxPostsPerSync?: number;
+  cooldownMinutes?: number;
+  canSyncNow?: boolean;
+  nextAllowedSyncAt?: string;
+  retryAfterSeconds?: number;
   lastSyncAt?: string;
   lastSyncStatus?: 'success' | 'error' | 'idle';
   lastSyncMessage?: string;
@@ -39,20 +92,21 @@ export interface SocialStatusResponse {
 
 let activeSessionToken: string | null = null;
 let activeSessionUserKey: string | null = null;
-
-function buildUrl(path: string): string {
-  return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
-}
+let activeSessionRole: 'user' | 'moderator' | null = null;
 
 export function isBackendConfigured(): boolean {
   return true;
+}
+
+export function hasActiveModeratorToken(): boolean {
+  return Boolean(activeSessionToken && activeSessionRole === 'moderator');
 }
 
 export async function checkBackendHealth(): Promise<BackendHealth | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(buildUrl('/api/health'), { signal: controller.signal });
+    const res = await fetch(buildApiUrl('/api/health'), { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return null;
     const contentType = res.headers.get('content-type') || '';
@@ -65,30 +119,106 @@ export async function checkBackendHealth(): Promise<BackendHealth | null> {
   }
 }
 
+/**
+ * Authenticates a moderator by sending MODERATOR_ACCESS_CODE ONLY to POST /api/auth/session.
+ * The code is never stored in localStorage, logs, or client state.
+ */
+export async function authenticateModeratorSession(
+  user: UserProfile | null,
+  moderatorCode: string
+): Promise<{
+  token: string;
+  user: { uid: string; name: string; email: string; role: 'moderator' };
+}> {
+  const uid = user?.uid || 'mod-session-' + Date.now().toString(36);
+  const name = user?.name || 'Moderador Vigila.pe';
+  const email = user?.email || 'moderacion@vigila.pe';
+
+  const res = await fetch(buildApiUrl('/api/auth/session'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      uid,
+      name,
+      email,
+      role: 'moderator',
+      moderatorCode
+    })
+  });
+
+  const data = (await res.json().catch(() => ({}))) as {
+    token?: string;
+    user?: { uid: string; name: string; email: string; role: 'user' | 'moderator' };
+    error?: string;
+  };
+
+  if (res.status === 403) {
+    activeSessionToken = null;
+    activeSessionUserKey = null;
+    activeSessionRole = null;
+    throw new ApiClientError(data.error || 'Código de moderador inválido', 403);
+  }
+
+  if (!res.ok || !data.token || data.user?.role !== 'moderator') {
+    throw new ApiClientError(
+      data.error || 'No se pudo autenticar la sesión de moderador.',
+      res.status || 500
+    );
+  }
+
+  activeSessionToken = data.token;
+  activeSessionRole = 'moderator';
+  activeSessionUserKey = `${uid}:moderator:${email}`;
+
+  return {
+    token: data.token,
+    user: {
+      uid: data.user.uid,
+      name: data.user.name,
+      email: data.user.email,
+      role: 'moderator'
+    }
+  };
+}
+
+/**
+ * Creates/reuses a backend session token via same-origin or configured base URL.
+ * Never requests moderator role without an explicit moderatorCode verification.
+ */
 export async function ensureBackendSession(user: UserProfile | null): Promise<string | null> {
-  if (!API_BASE_URL || !user) return null;
-  const userKey = `${user.uid}:${user.role}:${user.email}`;
+  if (!user) return null;
+
+  // If already holding a verified moderator token in memory, reuse it
+  if (activeSessionToken && activeSessionRole === 'moderator') {
+    return activeSessionToken;
+  }
+
+  // Never auto-escalate to moderator without MODERATOR_ACCESS_CODE modal authentication
+  const requestedRole: 'user' = 'user';
+  const userKey = `${user.uid}:${requestedRole}:${user.email}`;
   if (activeSessionToken && activeSessionUserKey === userKey) {
     return activeSessionToken;
   }
 
   try {
-    const res = await fetch(buildUrl('/api/auth/session'), {
+    const res = await fetch(buildApiUrl('/api/auth/session'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         uid: user.uid,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: requestedRole
       })
     });
     if (!res.ok) {
       activeSessionToken = null;
+      activeSessionRole = null;
       return null;
     }
     const data = (await res.json()) as { token?: string };
     activeSessionToken = data.token || null;
+    activeSessionRole = activeSessionToken ? 'user' : null;
     activeSessionUserKey = userKey;
     return activeSessionToken;
   } catch {
@@ -99,6 +229,7 @@ export async function ensureBackendSession(user: UserProfile | null): Promise<st
 export function clearBackendSession(): void {
   activeSessionToken = null;
   activeSessionUserKey = null;
+  activeSessionRole = null;
 }
 
 async function authorizedFetch(
@@ -115,7 +246,7 @@ async function authorizedFetch(
     headers.set('Content-Type', 'application/json');
   }
 
-  return fetch(buildUrl(path), {
+  return fetch(buildApiUrl(path), {
     ...init,
     headers
   });
@@ -129,7 +260,10 @@ export async function fetchBackendIncidents(
   const res = await authorizedFetch(`/api/incidents${query}`, user);
   const data = (await res.json()) as { incidents?: IncidentReport[]; error?: string };
   if (!res.ok) {
-    throw new Error(data.error || 'Error al cargar incidentes del servidor.');
+    throw new ApiClientError(
+      data.error || 'Error al cargar incidentes del servidor.',
+      res.status
+    );
   }
   return data.incidents || [];
 }
@@ -146,7 +280,10 @@ export async function reviewBackendIncident(
   });
   const data = (await res.json()) as { incident?: IncidentReport; error?: string };
   if (!res.ok || !data.incident) {
-    throw new Error(data.error || 'No se pudo moderar el incidente en el servidor.');
+    throw new ApiClientError(
+      data.error || 'No se pudo moderar el incidente en el servidor.',
+      res.status
+    );
   }
   return data.incident;
 }
@@ -155,7 +292,10 @@ export async function fetchSocialStatus(user: UserProfile | null): Promise<Socia
   const res = await authorizedFetch('/api/social/status', user);
   const data = (await res.json()) as SocialStatusResponse & { error?: string };
   if (!res.ok) {
-    throw new Error(data.error || 'No se pudo obtener el estado de fuentes sociales.');
+    throw new ApiClientError(
+      data.error || 'No se pudo obtener el estado de fuentes sociales.',
+      res.status
+    );
   }
   return data;
 }
@@ -173,7 +313,10 @@ export async function updateSocialConfig(
     error?: string;
   };
   if (!res.ok || !data.config) {
-    throw new Error(data.error || 'No se pudo guardar la configuración de búsqueda.');
+    throw new ApiClientError(
+      data.error || 'No se pudo guardar la configuración de búsqueda.',
+      res.status
+    );
   }
   return data.config;
 }
@@ -185,25 +328,38 @@ export async function triggerXSync(user: UserProfile | null): Promise<{
     importedCount: number;
     duplicatesSkipped: number;
     queryUsed: string;
+    maxPostsLimit?: number;
+    cooldownMinutes?: number;
+    nextAllowedSyncAt?: string;
   };
   stats: SocialStatusResponse['stats'];
 }> {
   const res = await authorizedFetch('/api/social/x/sync', user, {
     method: 'POST'
   });
-  const data = (await res.json()) as {
+  const data = (await res.json().catch(() => ({}))) as {
     message?: string;
+    code?: string;
+    nextAllowedSyncAt?: string;
+    retryAfterSeconds?: number;
     result?: {
       fetchedCount: number;
       importedCount: number;
       duplicatesSkipped: number;
       queryUsed: string;
+      maxPostsLimit?: number;
+      cooldownMinutes?: number;
+      nextAllowedSyncAt?: string;
     };
     stats?: SocialStatusResponse['stats'];
     error?: string;
   };
   if (!res.ok || !data.result || !data.stats) {
-    throw new Error(data.error || 'No se pudo sincronizar con X.');
+    throw new ApiClientError(data.error || 'No se pudo sincronizar con X.', res.status, {
+      code: data.code,
+      nextAllowedSyncAt: data.nextAllowedSyncAt,
+      retryAfterSeconds: data.retryAfterSeconds
+    });
   }
   return {
     message: data.message || 'Sincronización completada.',
@@ -224,7 +380,10 @@ export async function fetchSocialPosts(
     error?: string;
   };
   if (!res.ok) {
-    throw new Error(data.error || 'No se pudieron cargar las publicaciones de X.');
+    throw new ApiClientError(
+      data.error || 'No se pudieron cargar las publicaciones de X.',
+      res.status
+    );
   }
   return {
     posts: data.posts || [],
@@ -264,7 +423,10 @@ export async function reviewBackendSocialPost(
     error?: string;
   };
   if (!res.ok || !data.post) {
-    throw new Error(data.error || 'No se pudo procesar la revisión de la publicación.');
+    throw new ApiClientError(
+      data.error || 'No se pudo procesar la revisión de la publicación.',
+      res.status
+    );
   }
   return {
     post: data.post,
@@ -277,7 +439,10 @@ export async function fetchSocialAuditLogs(user: UserProfile | null): Promise<So
   const res = await authorizedFetch('/api/social/audit', user);
   const data = (await res.json()) as { logs?: SocialSourceAudit[]; error?: string };
   if (!res.ok) {
-    throw new Error(data.error || 'No se pudo cargar la bitácora de auditoría.');
+    throw new ApiClientError(
+      data.error || 'No se pudo cargar la bitácora de auditoría.',
+      res.status
+    );
   }
   return data.logs || [];
 }

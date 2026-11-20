@@ -30,7 +30,12 @@ export const ModerationPanel: React.FC = () => {
     backendAvailable,
     isDemoMode
   } = useIncidents();
-  const { currentUser, isModerator, switchUserPersona } = useAuth();
+  const {
+    currentUser,
+    isModerator,
+    isModeratorAuthenticated,
+    openModeratorModal
+  } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'stats' | 'logs'>('pending');
   const [filterDistrict, setFilterDistrict] = useState<string>('all');
@@ -100,9 +105,9 @@ export const ModerationPanel: React.FC = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300 bg-amber-950/80 px-3 py-0.5 rounded-full border border-amber-800">
                 Panel Oficial de Moderación
               </span>
-              {isModerator && (
+              {isModeratorAuthenticated && (
                 <span className="text-[11px] font-semibold text-emerald-300 bg-emerald-950/80 px-2.5 py-0.5 rounded-full border border-emerald-800">
-                  Acceso concedido
+                  Moderador autenticado
                 </span>
               )}
               {isDemoMode && (
@@ -122,7 +127,7 @@ export const ModerationPanel: React.FC = () => {
 
           {!isModerator ? (
             <button
-              onClick={() => switchUserPersona('moderador')}
+              onClick={openModeratorModal}
               className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-900 font-extrabold text-xs shadow-md shrink-0 flex items-center gap-2"
             >
               <Lock className="w-4 h-4" />

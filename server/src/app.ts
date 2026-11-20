@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,21 +75,19 @@ export function createApp({ db, xService }: AppDependencies) {
     const configuredModCode = (process.env.MODERATOR_ACCESS_CODE || '').trim();
 
     if (role === 'moderator') {
-      if (configuredModCode) {
-        if (moderatorCode !== configuredModCode) {
-          res.status(403).json({ error: 'Código de moderador inválido.' });
-          return;
-        }
-        grantedRole = 'moderator';
-      } else if (process.env.NODE_ENV !== 'production' && email === 'moderacion@vigila.pe') {
-        // Allow demo moderator persona in local development when no MODERATOR_ACCESS_CODE is set
-        grantedRole = 'moderator';
-      } else {
-        res.status(403).json({
-          error: 'No autorizado para obtener rol de moderador.'
-        });
+      const providedCode = typeof moderatorCode === 'string' ? moderatorCode.trim() : '';
+      const providedBuf = Buffer.from(providedCode, 'utf8');
+      const expectedBuf = Buffer.from(configuredModCode, 'utf8');
+      const matches =
+        Boolean(configuredModCode) &&
+        providedBuf.length === expectedBuf.length &&
+        crypto.timingSafeEqual(providedBuf, expectedBuf);
+
+      if (!matches) {
+        res.status(403).json({ error: 'Código de moderador inválido' });
         return;
       }
+      grantedRole = 'moderator';
     }
 
     const token = issueSessionToken({

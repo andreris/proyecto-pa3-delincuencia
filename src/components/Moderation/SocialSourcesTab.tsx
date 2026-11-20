@@ -7,6 +7,7 @@ import {
   PERU_DISTRICTS
 } from '../../data/demoData';
 import {
+  ApiClientError,
   fetchSocialAuditLogs,
   fetchSocialPosts,
   fetchSocialStatus,
@@ -48,7 +49,12 @@ const XLogoIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) 
 );
 
 export const SocialSourcesTab: React.FC = () => {
-  const { currentUser, isModerator, switchUserPersona } = useAuth();
+  const {
+    currentUser,
+    isModerator,
+    isModeratorAuthenticated,
+    openModeratorModal
+  } = useAuth();
   const {
     incidents,
     upsertIncident,
@@ -101,7 +107,7 @@ export const SocialSourcesTab: React.FC = () => {
   }, [posts, backendAvailable]);
 
   const loadBackendSocialData = async () => {
-    if (!backendAvailable || !isModerator) return;
+    if (!backendAvailable || !isModeratorAuthenticated) return;
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -122,17 +128,17 @@ export const SocialSourcesTab: React.FC = () => {
   };
 
   useEffect(() => {
-    if (backendAvailable && isModerator) {
+    if (backendAvailable && isModeratorAuthenticated) {
       loadBackendSocialData();
     }
-  }, [backendAvailable, isModerator, currentUser?.uid, currentUser?.role]);
+  }, [backendAvailable, isModeratorAuthenticated, currentUser?.uid, currentUser?.role]);
 
   const handleSyncX = async () => {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!isModerator) {
-      setErrorMsg('Acceso restringido: solo los moderadores pueden sincronizar X.');
+    if (!isModeratorAuthenticated || !isModerator) {
+      setErrorMsg('Acceso restringido: debes autenticarte como moderador antes de sincronizar X.');
       return;
     }
 
@@ -141,20 +147,50 @@ export const SocialSourcesTab: React.FC = () => {
       setSyncing(true);
       setTimeout(() => {
         setSyncing(false);
+        setStatusFilter('Pendiente de validación');
         setSuccessMsg(
-          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración para revisión humana.'
+          'Modo demo: no hay X_BEARER_TOKEN activo en el backend. Mostrando publicaciones públicas de demostración en estado "Pendiente de validación".'
         );
-      }, 500);
+      }, 400);
       return;
     }
 
     setSyncing(true);
     try {
       const res = await triggerXSync(currentUser);
+      setStatusFilter('Pendiente de validación');
       setSuccessMsg(res.message);
       await loadBackendSocialData();
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'No se pudo sincronizar con X.');
+      if (err instanceof ApiClientError) {
+        if (err.status === 429 && err.nextAllowedSyncAt) {
+          setStatusInfo(prev =>
+            prev
+              ? {
+                  ...prev,
+                  canSyncNow: false,
+                  nextAllowedSyncAt: err.nextAllowedSyncAt,
+                  retryAfterSeconds: err.retryAfterSeconds
+                }
+              : prev
+          );
+          setErrorMsg(err.message);
+        } else if (
+          err.code === 'X_TOKEN_MISSING' ||
+          err.code === 'X_CREDITS_DEPLETED' ||
+          err.status === 402
+        ) {
+          setPosts(DEMO_SOCIAL_POSTS);
+          setStatusFilter('Pendiente de validación');
+          setSuccessMsg(
+            'Modo demo: sin token o créditos disponibles en X API. Se muestran publicaciones de demostración para revisión humana.'
+          );
+        } else {
+          setErrorMsg(err.message);
+        }
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : 'No se pudo sincronizar con X.');
+      }
     } finally {
       setSyncing(false);
     }
@@ -162,7 +198,7 @@ export const SocialSourcesTab: React.FC = () => {
 
   const handleSaveQuery = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isModerator) return;
+    if (!isModeratorAuthenticated || !isModerator) return;
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -185,6 +221,7 @@ export const SocialSourcesTab: React.FC = () => {
   };
 
   const openCreateModal = (post: SocialPost) => {
+    if (!isModeratorAuthenticated) return;
     setCreatingFromPost(post);
     setReportDistrict(post.suggestedDistrict || '');
     setReportAddress(
@@ -299,6 +336,7 @@ export const SocialSourcesTab: React.FC = () => {
   };
 
   const handleOpenLinkModal = (post: SocialPost) => {
+    if (!isModeratorAuthenticated) return;
     setLinkingPost(post);
     const firstActive = incidents.find(i => i.status !== 'Descartado');
     setSelectedIncidentId(firstActive?.id || '');
@@ -343,7 +381,7 @@ export const SocialSourcesTab: React.FC = () => {
   };
 
   const handleDiscardPost = async (post: SocialPost) => {
-    if (!isModerator) return;
+    if (!isModeratorAuthenticated || !isModerator) return;
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -381,34 +419,51 @@ export const SocialSourcesTab: React.FC = () => {
       ? posts
       : posts.filter(p => p.status === 'Pendiente de validación');
 
-  // RBAC guard in UI
-  if (!isModerator) {
-    return (
-      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm text-center space-y-4">
-        <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-          <Lock className="w-6 h-6" />
-        </div>
-        <div className="space-y-1 max-w-md mx-auto">
-          <h3 className="font-extrabold text-base text-slate-900">
-            Acceso restringido a Moderadores
-          </h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            La sincronización con X API v2, la edición de consultas y la revisión de publicaciones públicas requieren autorización de rol <strong className="text-slate-900">moderator</strong>.
-          </p>
-        </div>
-        <button
-          onClick={() => switchUserPersona('moderador')}
-          className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-900 font-extrabold text-xs shadow-sm inline-flex items-center gap-2"
-        >
-          <Lock className="w-4 h-4" />
-          Activar modo Moderador
-        </button>
-      </div>
-    );
-  }
+  const maxPostsPerSync = statusInfo?.maxPostsPerSync ?? 10;
+  const cooldownMinutes = statusInfo?.cooldownMinutes ?? 60;
+  const nextAllowedDate = statusInfo?.nextAllowedSyncAt
+    ? new Date(statusInfo.nextAllowedSyncAt)
+    : null;
+  const isInCooldown = Boolean(
+    nextAllowedDate && nextAllowedDate.getTime() > Date.now()
+  );
+  const nextAllowedLabel = nextAllowedDate
+    ? isInCooldown
+      ? `Desde las ${nextAllowedDate.toLocaleTimeString('es-PE', {
+          hour: '2-digit',
+          minute: '2-digit'
+        })} (${nextAllowedDate.toLocaleDateString('es-PE')})`
+      : 'Disponible ahora'
+    : `Disponible ahora (1 vez cada ${cooldownMinutes} min)`;
 
   return (
     <div className="space-y-5">
+      {/* Authentication Gate Notice when not yet authenticated as moderator */}
+      {!isModeratorAuthenticated && (
+        <div className="bg-white p-6 rounded-3xl border border-amber-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-extrabold text-sm text-slate-900">
+                Acceso restringido a Moderadores autenticados
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed max-w-xl">
+                El botón <strong className="text-slate-900">Sincronizar X</strong> y la revisión de fuentes sociales permanecen deshabilitados hasta validar tu código de acceso de moderador con el servidor.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={openModeratorModal}
+            className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-900 font-extrabold text-xs shadow-sm inline-flex items-center justify-center gap-2 shrink-0"
+          >
+            <Lock className="w-4 h-4" />
+            Activar modo Moderador
+          </button>
+        </div>
+      )}
+
       {/* Status & Sync Control Panel */}
       <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -418,6 +473,13 @@ export const SocialSourcesTab: React.FC = () => {
                 <XLogoIcon className="w-3 h-3" />
                 API oficial de X (v2)
               </span>
+
+              {isModeratorAuthenticated && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Moderador autenticado
+                </span>
+              )}
 
               {isDemoMode ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold">
@@ -441,12 +503,27 @@ export const SocialSourcesTab: React.FC = () => {
 
           <button
             onClick={handleSyncX}
-            disabled={syncing || loading}
-            className="px-5 py-2.5 rounded-xl bg-[#0B1F3A] hover:bg-blue-900 disabled:opacity-60 text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 shrink-0 transition-all active:scale-95"
+            disabled={!isModeratorAuthenticated || syncing || loading}
+            className="px-5 py-2.5 rounded-xl bg-[#0B1F3A] hover:bg-blue-900 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 shrink-0 transition-all active:scale-95"
+            title={
+              !isModeratorAuthenticated
+                ? 'Autentícate como moderador para habilitar Sincronizar X'
+                : 'Sincronizar máximo 10 publicaciones públicas recientes'
+            }
           >
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
             {syncing ? 'Sincronizando X...' : 'Sincronizar X'}
           </button>
+        </div>
+
+        {/* Consumption policy & limits banner */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-blue-50/80 border border-blue-200 text-xs text-blue-900">
+          <span className="font-bold">
+            Máximo {maxPostsPerSync} publicaciones por sincronización
+          </span>
+          <span className="text-[11px] font-semibold text-blue-800">
+            Próxima consulta permitida: {nextAllowedLabel}
+          </span>
         </div>
 
         {/* Metrics strip */}
@@ -492,22 +569,23 @@ export const SocialSourcesTab: React.FC = () => {
                 type="text"
                 value={queryInput}
                 onChange={e => setQueryInput(e.target.value)}
+                disabled={!isModeratorAuthenticated}
                 maxLength={250}
                 placeholder="Ej: robo OR asalto OR extorsión OR inseguridad lang:es"
-                className="w-full text-xs pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
+                className="w-full text-xs pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono disabled:opacity-60"
               />
             </div>
             <button
               type="submit"
-              disabled={savingQuery}
-              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0"
+              disabled={!isModeratorAuthenticated || savingQuery}
+              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center justify-center gap-1.5 shrink-0"
             >
               <Save className="w-3.5 h-3.5" />
               {savingQuery ? 'Guardando...' : 'Guardar consulta'}
             </button>
           </div>
           <p className="text-[11px] text-slate-400">
-            Solo procesa publicaciones públicas recientes. Retención automática de descartados: {statusInfo?.retentionDays || 30} días.
+            Solo procesa publicaciones públicas recientes en una única consulta (sin paginación, máx. {maxPostsPerSync} posts cada {cooldownMinutes} min). Retención automática de descartados: {statusInfo?.retentionDays || 30} días.
           </p>
         </form>
       </div>
@@ -651,7 +729,8 @@ export const SocialSourcesTab: React.FC = () => {
                   <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => openCreateModal(post)}
-                      className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
+                      disabled={!isModeratorAuthenticated}
+                      className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 shadow-xs"
                     >
                       <PlusCircle className="w-3.5 h-3.5" />
                       Crear reporte desde publicación
@@ -659,7 +738,8 @@ export const SocialSourcesTab: React.FC = () => {
 
                     <button
                       onClick={() => handleOpenLinkModal(post)}
-                      className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center gap-1.5 border border-slate-200"
+                      disabled={!isModeratorAuthenticated}
+                      className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-800 text-xs font-semibold flex items-center gap-1.5 border border-slate-200"
                     >
                       <Link2 className="w-3.5 h-3.5" />
                       Vincular a reporte existente
@@ -667,7 +747,8 @@ export const SocialSourcesTab: React.FC = () => {
 
                     <button
                       onClick={() => handleDiscardPost(post)}
-                      className="px-3.5 py-2 rounded-xl bg-white hover:bg-red-50 text-slate-600 hover:text-red-700 text-xs font-semibold flex items-center gap-1.5 border border-slate-200 ml-auto"
+                      disabled={!isModeratorAuthenticated}
+                      className="px-3.5 py-2 rounded-xl bg-white hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed text-slate-600 hover:text-red-700 text-xs font-semibold flex items-center gap-1.5 border border-slate-200 ml-auto"
                     >
                       <XCircle className="w-3.5 h-3.5" />
                       Descartar
