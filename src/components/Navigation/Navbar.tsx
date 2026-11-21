@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useIncidents } from '../../context/IncidentContext';
 import {
-  Shield,
   MapPin,
   PlusCircle,
   Route,
@@ -73,22 +72,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           onClick={() => handleNavClick('landing')}
           className="flex items-center gap-2.5 text-left group focus:outline-none"
         >
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-blue-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
-            <Shield className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1">
-              <span className="font-extrabold text-xl tracking-tight text-white font-sans">
-                Vigila<span className="text-blue-400">.pe</span>
-              </span>
-              <span className="bg-blue-800/80 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded text-blue-200 border border-blue-700">
-                Perú
-              </span>
-            </div>
-            <span className="hidden sm:block text-[10px] text-slate-300 tracking-wide font-medium">
-              Geoseguridad Ciudadana
-            </span>
-          </div>
+          <img src="/vigila-logo.png" alt="Vigila.pe, ir al inicio" className="w-28 sm:w-32 h-10 object-cover object-[center_54%]" />
         </button>
 
         {/* Main Navigation (Desktop) */}
