@@ -3,13 +3,15 @@ import L from 'leaflet';
 import { IncidentReport, PreventiveRoute } from '../../types';
 import { ShieldAlert, AlertTriangle, Info, Eye, Layers, Compass, LocateFixed } from 'lucide-react';
 
+const defaultCenter: [number, number] = [-12.055, -77.035];
+
 interface LeafletMapProps {
   incidents: IncidentReport[];
   selectedIncident: IncidentReport | null;
   onSelectIncident?: (incident: IncidentReport | null) => void;
   center?: [number, number];
   zoom?: number;
-  activeRoute?: PreventiveRoute | null;
+  activeRoute?: Pick<PreventiveRoute, 'origin' | 'destination' | 'mainPath' | 'altPath'> | null;
   onPickCoordinate?: (coords: { lat: number; lng: number }) => void;
   isPickingLocation?: boolean;
   pickedCoords?: { lat: number; lng: number } | null;
@@ -21,7 +23,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   incidents,
   selectedIncident,
   onSelectIncident,
-  center = [-12.055, -77.035],
+  center = defaultCenter,
   zoom = 12,
   activeRoute = null,
   onPickCoordinate,
@@ -118,13 +120,6 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
 
     mapInstanceRef.current = map;
 
-    // Handle map clicks for coordinate selection
-    map.on('click', (e: L.LeafletMouseEvent) => {
-      if (onPickCoordinate) {
-        onPickCoordinate({ lat: Number(e.latlng.lat.toFixed(5)), lng: Number(e.latlng.lng.toFixed(5)) });
-      }
-    });
-
     // Trigger resize on layout settle
     const timer = setTimeout(() => {
       map.invalidateSize();
@@ -136,6 +131,14 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
       mapInstanceRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !onPickCoordinate) return;
+    const pick = (event: L.LeafletMouseEvent) => onPickCoordinate(event.latlng);
+    map.on('click', pick);
+    return () => { map.off('click', pick); };
+  }, [onPickCoordinate]);
 
   // Sync Center and Zoom
   useEffect(() => {
@@ -312,7 +315,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
         weight: 4,
         opacity: 0.65,
         dashArray: '8, 8'
-      }).bindTooltip('Ruta alternativa habitual (Mayor exposición)', { sticky: true });
+      }).bindTooltip('Ruta alternativa', { sticky: true });
       routeGroup.addLayer(altPolyline);
     }
 
@@ -322,7 +325,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
         color: '#2563EB',
         weight: 6,
         opacity: 0.9
-      }).bindTooltip('Ruta preventiva recomendada (Menor exposición)', { sticky: true });
+      }).bindTooltip('Ruta seleccionada', { sticky: true });
       routeGroup.addLayer(mainPolyline);
 
       // Fit bounds to show entire route

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { PreventiveRoute } from '../../types';
 import { DEMO_PREVENTIVE_ROUTES } from '../../data/demoData';
 import { LeafletMap } from '../Map/LeafletMap';
@@ -17,10 +17,86 @@ import {
   Compass
 } from 'lucide-react';
 
+type Point = {lat: number; lng: number};
+type Candidate = {path: [number, number][]; minutes: number; km: number; reports: number};
+type DrivingRoute = {geometry: {coordinates: [number, number][]}; duration: number; distance: number};
+
+// Distancia al segmento en metros, con proyección local a la latitud del reporte.
+function nearPath(point: Point, path: [number, number][]) {
+  const scale = 111320 * Math.cos(point.lat * Math.PI / 180);
+  return path.some(([lat, lng], i) => {
+    if (!i) return false;
+    const [prevLat, prevLng] = path[i - 1];
+    const x = (prevLng - point.lng) * scale, y = (prevLat - point.lat) * 111320;
+    const dx = (lng - prevLng) * scale, dy = (lat - prevLat) * 111320;
+    const t = Math.max(0, Math.min(1, -(x * dx + y * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(x + t * dx, y + t * dy) <= 300;
+  });
+}
+
 export const PreventiveRoutesView: React.FC = () => {
   const { publicIncidents } = useIncidents();
   const [selectedRoute, setSelectedRoute] = useState<PreventiveRoute>(DEMO_PREVENTIVE_ROUTES[0]);
-  const [activeTab, setActiveTab] = useState<'main' | 'alt'>('main');
+  const [points, setPoints] = useState<Partial<Record<'Inicio' | 'Llegada', Point>>>({});
+  const [picking, setPicking] = useState<'Inicio' | 'Llegada' | null>(null);
+  const [options, setOptions] = useState<Candidate[]>([]);
+  const [chosen, setChosen] = useState(0);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const request = useRef(0);
+  const mapPanel = useRef<HTMLDivElement>(null);
+  const selected = options[chosen];
+  function setPoint(key: 'Inicio' | 'Llegada', point: Point) {
+    request.current++;
+    setBusy(false);
+    setOptions([]);
+    setMessage('');
+    setPicking(null);
+    setPoints(prev => ({...prev, [key]: point}));
+  }
+  async function calculate() {
+    const {Inicio, Llegada} = points;
+    if (!Inicio || !Llegada) return;
+    const id = ++request.current;
+    setPicking(null);
+    setBusy(true);
+    setOptions([]);
+    setMessage('');
+    try {
+      const coords = [Inicio, Llegada].map(p => `${p.lng},${p.lat}`).join(';');
+      const response = await fetch(`https://routing.openstreetmap.de/routed-car/route/v1/driving/${coords}?alternatives=true&geometries=geojson&overview=full&radiuses=500;500`, {signal: AbortSignal.timeout(18000)});
+      if (!response.ok) throw Error();
+      const data = await response.json();
+      if (data.code !== 'Ok' || !data.routes?.length) throw Error();
+      const routes: Candidate[] = data.routes.filter((r: DrivingRoute) => r.distance > 0).map((r: DrivingRoute) => {
+        const path = r.geometry.coordinates.map(([lng, lat]): [number, number] => [lat, lng]);
+        return {path, minutes: r.duration / 60, km: r.distance / 1000,
+          reports: publicIncidents.filter(i => i.status === 'Verificado' && !i.isDemo && nearPath(i.approxLocation, path)).length};
+      });
+      if (!routes.length) throw Error();
+      routes.sort((a, b) => a.minutes - b.minutes);
+      const quieter = routes.reduce((best, r) => r.reports < best.reports ? r : best);
+      if (request.current !== id) return;
+      setOptions(quieter === routes[0] ? [routes[0]] : [routes[0], quieter]);
+      setChosen(0);
+      if (routes.length === 1) setMessage('El servicio encontró un solo trayecto.');
+      else if (quieter === routes[0]) setMessage('La más rápida también tiene el menor número de reportes entre las alternativas.');
+    } catch {
+      if (request.current === id) setMessage('No se pudo calcular la ruta. Acerca los puntos a una vía transitable e inténtalo de nuevo.');
+    } finally {
+      if (request.current === id) setBusy(false);
+    }
+  }
+  function locate() {
+    const id = ++request.current;
+    setBusy(false);
+    setPicking(null);
+    setMessage('Buscando tu ubicación…');
+    if (!navigator.geolocation) {setMessage('Selecciona el inicio en el mapa.'); return;}
+    navigator.geolocation.getCurrentPosition(p => {
+      if (id === request.current) setPoint('Inicio', {lat:p.coords.latitude, lng:p.coords.longitude});
+    }, () => {if (id === request.current) setMessage('Ubicación no disponible. Marca el inicio en el mapa.');}, {timeout:10000});
+  }
 
   const getExposureBadge = (level: 'menor' | 'medio' | 'mayor') => {
     switch (level) {
@@ -49,9 +125,9 @@ export const PreventiveRoutesView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-hidden bg-slate-50">
+    <div className="flex-1 flex flex-col lg:flex-row h-full overflow-y-auto lg:overflow-hidden bg-slate-50">
       {/* Sidebar Controls & Itinerary Analysis */}
-      <div className="w-full lg:w-[420px] bg-white border-r border-slate-200 flex flex-col h-auto lg:h-full overflow-y-auto">
+      <div className="w-full lg:w-[420px] bg-white border-r border-slate-200 flex flex-col h-auto lg:h-full shrink-0 lg:overflow-y-auto">
         <div className="p-5 border-b border-slate-100 bg-[#0B1F3A] text-white">
           <div className="flex items-center gap-2 mb-1.5">
             <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white">
@@ -66,6 +142,24 @@ export const PreventiveRoutesView: React.FC = () => {
             Compara trayectos habituales frente a corredores con menor densidad de incidentes y mejor iluminación.
           </p>
         </div>
+
+        <section className="p-4 space-y-3 border-b text-sm">
+          <h3 className="font-bold">Planifica tu viaje en auto</h3>
+          {(['Inicio', 'Llegada'] as const).map(key => (
+            <div key={key} className="flex items-center justify-between gap-2">
+              <div><strong>{key}</strong><div className="text-xs text-slate-600">{points[key] ? `${points[key]!.lat.toFixed(4)}, ${points[key]!.lng.toFixed(4)}` : 'Sin seleccionar'}</div></div>
+              <button className="text-blue-700 font-semibold" onClick={() => {request.current++; setBusy(false); setPicking(key); mapPanel.current?.scrollIntoView({block:'nearest'}); setMessage(`Marca el punto de ${key.toLowerCase()} en el mapa.`);}}>Elegir en mapa</button>
+            </div>
+          ))}
+          <button onClick={locate} className="text-blue-700 font-semibold">Usar mi ubicación como inicio</button>
+          <p className="text-xs text-slate-600">Al calcular, se envían ambos puntos a OSRM para buscar rutas por carretera.</p>
+          <button onClick={calculate} disabled={busy || !points.Inicio || !points.Llegada} className="w-full rounded-xl bg-blue-600 text-white py-2 font-bold disabled:opacity-50">{busy ? 'Calculando…' : 'Calcular ruta'}</button>
+          {options.map((r, i) => <button key={i} aria-pressed={chosen === i} onClick={() => setChosen(i)} className={`block w-full text-left border rounded-xl p-3 ${chosen === i ? 'bg-blue-50 border-blue-500' : ''}`}>
+            <strong>{i === 0 ? 'Más rápida estimada' : 'Menos reportes cercanos'}</strong><br/>{Math.max(1,Math.round(r.minutes))} min · {r.km.toFixed(1)} km · {r.reports} reportes
+          </button>)}
+          {selected && <p className="text-xs">Se cuentan reportes verificados a 300 m del trayecto. El tiempo es estimado sin tráfico en vivo.</p>}
+          <p role="status" className="text-xs text-slate-700">{message}</p>
+        </section>
 
         {/* Mandatory Safety Notice */}
         <div className="m-4 p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
@@ -85,11 +179,11 @@ export const PreventiveRoutesView: React.FC = () => {
           </label>
           <div className="space-y-2">
             {DEMO_PREVENTIVE_ROUTES.map(route => {
-              const isSelected = selectedRoute.id === route.id;
+              const isSelected = !selected && selectedRoute.id === route.id;
               return (
                 <button
                   key={route.id}
-                  onClick={() => setSelectedRoute(route)}
+                  onClick={() => {request.current++; setBusy(false); setPicking(null); setMessage(''); setOptions([]); setSelectedRoute(route);}}
                   className={`w-full text-left p-3 rounded-xl border transition-all text-xs ${
                     isSelected
                       ? 'border-blue-600 bg-blue-50/70 shadow-sm ring-2 ring-blue-500/20'
@@ -117,7 +211,7 @@ export const PreventiveRoutesView: React.FC = () => {
         </div>
 
         {/* Selected Route Detailed Comparison Card */}
-        <div className="p-4 border-t border-slate-100 flex-1 space-y-4">
+        {!selected && <div className="p-4 border-t border-slate-100 flex-1 space-y-4">
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-500">Evaluación del corredor:</span>
@@ -179,11 +273,11 @@ export const PreventiveRoutesView: React.FC = () => {
               ))}
             </ul>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* Map Interactive Canvas */}
-      <div className="flex-1 relative min-h-[450px] lg:min-h-full">
+      <div ref={mapPanel} className="flex-1 relative min-h-[450px] lg:min-h-full">
         {/* Floating Route Legend on Map */}
         <div className="absolute top-4 left-4 z-20 bg-white/95 backdrop-blur-sm p-3 rounded-2xl shadow-lg border border-slate-200 text-xs space-y-2 max-w-xs">
           <p className="font-bold text-slate-900 flex items-center gap-1.5">
@@ -192,7 +286,7 @@ export const PreventiveRoutesView: React.FC = () => {
           </p>
           <div className="flex items-center gap-2">
             <span className="w-6 h-1.5 rounded-full bg-blue-600"></span>
-            <span className="font-semibold text-slate-700">Ruta preventiva (Línea sólida azul)</span>
+            <span className="font-semibold text-slate-700">Ruta seleccionada (línea azul)</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-6 h-1.5 rounded-full border-t-2 border-dashed border-amber-600"></span>
@@ -200,10 +294,16 @@ export const PreventiveRoutesView: React.FC = () => {
           </div>
         </div>
 
+        {picking && <p className="absolute bottom-14 left-3 z-[500] bg-white rounded-lg shadow p-2 text-sm">Toca el mapa para marcar {picking.toLowerCase()}.</p>}
         <LeafletMap
           incidents={publicIncidents}
           selectedIncident={null}
-          activeRoute={selectedRoute}
+          pickedCoords={picking === "Llegada" ? points.Inicio : undefined}
+          onPickCoordinate={picking ? point => setPoint(picking, point) : undefined}
+          activeRoute={selected && points.Inicio && points.Llegada ? {
+            origin: {...points.Inicio, name:'Inicio'}, destination: {...points.Llegada, name:'Llegada'},
+            mainPath:selected.path, altPath:options.find(r => r !== selected)?.path ?? []
+          } : selectedRoute}
           showRiskZones={true}
           className="h-full w-full"
         />
