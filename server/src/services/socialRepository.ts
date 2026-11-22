@@ -1,3 +1,4 @@
+import type {NewsMediaId} from '../newsMedia.js';
 import crypto from 'node:crypto';
 import { DatabaseAdapter } from '../db/types.js';
 import {
@@ -54,7 +55,7 @@ interface IncidentRow {
   false_report_flags: number;
   helpful_count: number;
   reported_by_role: IncidentReportRecord['reportedByRole'];
-  source: 'citizen' | 'x' | 'rpp';
+  source: 'citizen' | 'x' | NewsMediaId;
   source_url: string | null;
   location_status: LocationStatus | null;
   location_confidence: LocationConfidence | null;
@@ -727,7 +728,7 @@ export async function listIncidents(
     ? `SELECT * FROM incidents ORDER BY created_at DESC`
     : `SELECT * FROM incidents
        WHERE status != 'Descartado'
-         AND (source NOT IN ('x', 'rpp') OR status = 'Verificado')
+         AND (source = 'citizen' OR status = 'Verificado')
        ORDER BY created_at DESC`;
 
   const rows = await db.query<IncidentRow>(sql);
@@ -748,7 +749,7 @@ export async function createIncident(
     status?: ReportStatus;
     evidenceNote?: string;
     reportedByRole?: IncidentReportRecord['reportedByRole'];
-    source?: 'citizen' | 'x' | 'rpp';
+    source?: 'citizen' | 'x' | NewsMediaId;
     sourceUrl?: string;
     locationStatus?: LocationStatus;
     locationConfidence?: LocationConfidence;
@@ -766,7 +767,7 @@ export async function createIncident(
   let lng: number;
   let address: string;
 
-  if (source === 'x' || source === 'rpp' || input.locationStatus === 'moderator_confirmed') {
+  if ((source && source !== 'citizen') || input.locationStatus === 'moderator_confirmed') {
     const obfuscated = obfuscateCoordinatesForPublicMap(
       input.approxLocation.lat,
       input.approxLocation.lng

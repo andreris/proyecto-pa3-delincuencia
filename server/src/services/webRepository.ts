@@ -1,3 +1,4 @@
+import { newsMedia, type NewsMediaId } from '../newsMedia.js';
 import crypto from 'node:crypto';
 import { DatabaseAdapter } from '../db/types.js';
 import {
@@ -41,8 +42,8 @@ export function getConfiguredRppRssUrl(): string {
 
 interface WebNewsRow {
   id: string;
-  source: 'rpp';
-  source_name: 'RPP Noticias';
+  source: NewsMediaId;
+  source_name: string;
   external_id: string;
   title: string;
   excerpt: string;
@@ -138,8 +139,8 @@ function mapWebNewsRow(row: WebNewsRow): WebNewsRecord {
 
   return {
     id: row.id,
-    source: 'rpp',
-    sourceName: 'RPP Noticias',
+    source: row.source,
+    sourceName: row.source_name,
     externalId: row.external_id,
     title: sanitizeExternalText(row.title, 220),
     excerpt: sanitizeExternalText(row.excerpt, 360),
@@ -384,7 +385,8 @@ export interface EvaluatedWebNewsInput {
 
 export async function insertWebNewsDeduped(
   db: DatabaseAdapter,
-  items: EvaluatedWebNewsInput[]
+  items: EvaluatedWebNewsInput[],
+  medium: NewsMediaId = 'rpp'
 ): Promise<{
   imported: WebNewsRecord[];
   discarded: WebNewsRecord[];
@@ -405,7 +407,7 @@ export async function insertWebNewsDeduped(
       continue;
     }
 
-    const id = `WEB-RPP-${crypto.randomUUID().slice(0, 8)}`;
+    const id = `WEB-${medium.toUpperCase()}-${crypto.randomUUID().slice(0, 8)}`;
     const importedAt = new Date().toISOString();
     const safeTitle = sanitizeExternalText(item.title, 220);
     const safeExcerpt = sanitizeExternalText(item.excerpt, 360);
@@ -444,8 +446,8 @@ export async function insertWebNewsDeduped(
       ON CONFLICT(external_id) DO NOTHING`,
       [
         id,
-        'rpp',
-        'RPP Noticias',
+        medium,
+        newsMedia[medium].name,
         canonicalUrl,
         safeTitle,
         safeExcerpt,
@@ -477,8 +479,8 @@ export async function insertWebNewsDeduped(
 
     const record: WebNewsRecord = {
       id,
-      source: 'rpp',
-      sourceName: 'RPP Noticias',
+      source: medium,
+      sourceName: newsMedia[medium].name,
       externalId: canonicalUrl,
       title: safeTitle,
       excerpt: safeExcerpt,
@@ -689,7 +691,7 @@ export async function reviewWebNewsItem(
       actorRole: moderator.role,
       targetType: 'web_news',
       targetId: newsId,
-      details: `Noticia RPP (${item.originalUrl}) descartada. Motivo: ${reason}`
+      details: `Noticia de ${item.sourceName} (${item.originalUrl}) descartada. Motivo: ${reason}`
     });
 
     return {
@@ -736,7 +738,7 @@ export async function reviewWebNewsItem(
       actorRole: moderator.role,
       targetType: 'web_news',
       targetId: newsId,
-      details: `Noticia RPP (${item.originalUrl}) vinculada al incidente ${payload.linkedIncidentId}.`
+      details: `Noticia de ${item.sourceName} (${item.originalUrl}) vinculada al incidente ${payload.linkedIncidentId}.`
     });
 
     return {
@@ -838,7 +840,7 @@ export async function reviewWebNewsItem(
       actorRole: moderator.role,
       targetType: 'web_news',
       targetId: newsId,
-      details: `Noticia RPP (${item.originalUrl}) guardada como referencia en ${targetDistrict} (sin publicar en mapa).`
+      details: `Noticia de ${item.sourceName} (${item.originalUrl}) guardada como referencia en ${targetDistrict} (sin publicar en mapa).`
     });
 
     return {
@@ -919,9 +921,9 @@ export async function reviewWebNewsItem(
       address: confirmedDesc
     },
     status: 'Verificado',
-    evidenceNote: `Fuente externa: RPP Noticias — ${item.originalUrl} • Validado por moderación`,
+    evidenceNote: `Fuente externa: ${item.sourceName} — ${item.originalUrl} • Validado por moderación`,
     reportedByRole: 'Ciudadano',
-    source: 'rpp',
+    source: item.source,
     sourceUrl: item.originalUrl,
     locationStatus: 'moderator_confirmed',
     locationConfidence: 'high',
@@ -969,7 +971,7 @@ export async function reviewWebNewsItem(
     actorRole: moderator.role,
     targetType: 'web_news',
     targetId: newsId,
-    details: `Noticia RPP (${item.originalUrl}) aprobada y publicada como ${createdIncident.id} en ${canonicalDistrict} (locationStatus=moderator_confirmed, coordenadas ofuscadas 200-500m).`
+    details: `Noticia de ${item.sourceName} (${item.originalUrl}) aprobada y publicada como ${createdIncident.id} en ${canonicalDistrict} (locationStatus=moderator_confirmed, coordenadas ofuscadas 200-500m).`
   });
 
   return {

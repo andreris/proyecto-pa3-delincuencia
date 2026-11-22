@@ -575,7 +575,7 @@ export async function fetchSocialAuditLogs(user: UserProfile | null): Promise<So
 export interface WebStatusResponse {
   rppConfigured: boolean;
   source: 'rpp';
-  sourceName: 'RPP Noticias';
+  sourceName: string;
   rssUrl: string;
   isSyncing: boolean;
   filterDistricts?: string[];
@@ -640,11 +640,12 @@ export async function updateWebConfig(
 
 export async function triggerRppSync(
   user: UserProfile | null,
-  filters?: SocialFilterOptions
+  filters?: SocialFilterOptions,
+  medium = 'rpp'
 ): Promise<{
   message: string;
   result: {
-    sourceName: 'RPP Noticias';
+    sourceName: string;
     rssUrl: string;
     fetchedCount: number;
     importedCount: number;
@@ -660,7 +661,7 @@ export async function triggerRppSync(
   };
   stats: WebStatusResponse['stats'];
 }> {
-  const res = await authorizedFetch('/api/web/rpp/sync', user, {
+  const res = await authorizedFetch(`/api/web/${medium}/sync`, user, {
     method: 'POST',
     body: filters ? JSON.stringify(filters) : undefined
   });
@@ -670,7 +671,7 @@ export async function triggerRppSync(
     nextAllowedSyncAt?: string;
     retryAfterSeconds?: number;
     result?: {
-      sourceName: 'RPP Noticias';
+      sourceName: string;
       rssUrl: string;
       fetchedCount: number;
       importedCount: number;
@@ -689,7 +690,7 @@ export async function triggerRppSync(
   };
   if (!res.ok || !data.result || !data.stats) {
     throw new ApiClientError(
-      data.error || 'No se pudo sincronizar con RPP Noticias RSS.',
+      data.error || 'No se pudo sincronizar con el medio seleccionado.',
       res.status,
       {
         code: data.code,
@@ -699,7 +700,7 @@ export async function triggerRppSync(
     );
   }
   return {
-    message: data.message || 'Sincronización RPP Noticias completada.',
+    message: data.message || 'Sincronización de noticias completada.',
     result: data.result,
     stats: data.stats
   };

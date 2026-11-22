@@ -1,3 +1,4 @@
+import { isNewsMediaId } from '../newsMedia.js';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { DatabaseAdapter } from '../db/types.js';
@@ -156,7 +157,7 @@ export function createWebRouter(db: DatabaseAdapter, webService: WebService): Ro
 
   // Moderator-only: trigger manual sync from official RPP Noticias RSS feed
   router.post(
-    '/rpp/sync',
+    '/:medium/sync',
     requireAuth,
     requireModerator,
     syncLimiter,
@@ -178,6 +179,8 @@ export function createWebRouter(db: DatabaseAdapter, webService: WebService): Ro
           body.dateFrom !== undefined ||
           body.dateTo !== undefined;
 
+        const medium = req.params.medium;
+        if (!isNewsMediaId(medium)) { res.status(400).json({ error: 'Medio no admitido.' }); return; }
         const result = await webService.syncRppNews(
           db,
           req.authUser!,
@@ -190,12 +193,13 @@ export function createWebRouter(db: DatabaseAdapter, webService: WebService): Ro
                 dateFrom: body.dateFrom,
                 dateTo: body.dateTo
               }
-            : undefined
+            : undefined,
+          medium
         );
         const stats = await getWebNewsStats(db);
 
         res.json({
-          message: `Sincronización RPP Noticias completada: ${result.importedCount} noticias importadas en revisión, ${result.discardedCount} descartadas, ${result.duplicatesSkipped} duplicadas.`,
+          message: `Sincronización de ${result.sourceName} completada: ${result.importedCount} noticias importadas en revisión, ${result.discardedCount} descartadas, ${result.duplicatesSkipped} duplicadas.`,
           result,
           stats
         });

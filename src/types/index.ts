@@ -1,3 +1,4 @@
+import type { NewsMediaId } from '../../server/src/newsMedia';
 export type IncidentCategory = 
   | 'robo' 
   | 'extorsion' 
@@ -47,7 +48,7 @@ export interface IncidentReport {
   falseReportFlags: number;
   helpfulCount: number;
   reportedByRole: 'Peatón' | 'Conductor' | 'Comerciante' | 'Ciudadano';
-  source?: 'citizen' | 'x' | 'rpp';
+  source?: 'citizen' | 'x' | NewsMediaId;
   sourceUrl?: string;
   locationStatus?: LocationStatus;
   locationConfidence?: LocationConfidence;
@@ -126,8 +127,8 @@ export interface SocialSourceAudit {
 
 export interface WebNewsItem {
   id: string;
-  source: 'rpp';
-  sourceName: 'RPP Noticias';
+  source: NewsMediaId;
+  sourceName: string;
   externalId: string;
   title: string;
   excerpt: string;

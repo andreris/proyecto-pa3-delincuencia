@@ -392,7 +392,7 @@ test('Caso 4 y 5: Lima con distrito aceptada en Pendiente, Callao/extranjero/reg
     assert.ok(syncAudit);
     assert.equal(syncAudit.details.includes('RPP Noticias'), true);
     assert.equal(syncAudit.details.includes('Filtros activos'), true);
-    assert.equal(syncAudit.details.includes('Motivos de descarte'), true);
+    assert.equal(syncAudit.details.includes('Motivos de omisión'), true);
   } finally {
     if (originalCooldown === undefined) delete process.env.WEB_SYNC_COOLDOWN_MINUTES;
     else process.env.WEB_SYNC_COOLDOWN_MINUTES = originalCooldown;

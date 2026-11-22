@@ -1,3 +1,4 @@
+import {newsMedia, type NewsMediaId} from '../../../server/src/newsMedia';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useIncidents } from '../../context/IncidentContext';
@@ -99,6 +100,7 @@ export const WebSourcesTab: React.FC = () => {
     backendAvailable
   } = useIncidents();
 
+  const [medium, setMedium] = useState<NewsMediaId>("rpp");
   const [newsItems, setNewsItems] = useState<WebNewsItem[]>(() => {
     try {
       const saved = localStorage.getItem('vigila_pe_demo_web_news');
@@ -344,7 +346,7 @@ export const WebSourcesTab: React.FC = () => {
         dateTo: nextTo
       });
       setSuccessMsg(
-        'Filtros aplicados a las noticias importadas y guardados para el próximo consumo del RSS oficial de RPP Noticias.'
+        'Filtros aplicados a las noticias importadas y guardados para el próximo consumo del RSS del medio seleccionado.'
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'No se pudieron aplicar los filtros.');
@@ -522,6 +524,7 @@ export const WebSourcesTab: React.FC = () => {
     }
 
     if (!backendAvailable) {
+      if (medium !== "rpp") {setErrorMsg("Conecta el servidor para sincronizar este medio.");return;}
       setSyncing(true);
       setTimeout(() => {
         setSyncing(false);
@@ -548,7 +551,7 @@ export const WebSourcesTab: React.FC = () => {
         additionalKeywords: effectiveAdditional,
         dateFrom: effectiveFrom || undefined,
         dateTo: effectiveTo || undefined
-      });
+      }, medium);
       setAppliedIncidentTypes(effectiveIncidentTypes);
       setAppliedLocationRefs(effectiveLocationRefs);
       setAppliedAdditionalKeywords(effectiveAdditional);
@@ -587,7 +590,7 @@ export const WebSourcesTab: React.FC = () => {
         }
       } else {
         setErrorMsg(
-          err instanceof Error ? err.message : 'No se pudo sincronizar RPP Noticias RSS.'
+          err instanceof Error ? err.message : 'No se pudo sincronizar el medio seleccionado.'
         );
       }
     } finally {
@@ -649,7 +652,7 @@ export const WebSourcesTab: React.FC = () => {
           upsertIncident(outcome.createdIncident);
         }
         setSuccessMsg(
-          `Noticia RPP ${outcome.createdIncident?.id || ''} aprobada y publicada en el mapa con ubicación aproximada (ofuscada 200–500 m).`
+          `Noticia de ${reviewingItem.sourceName} ${outcome.createdIncident?.id || ''} aprobada y publicada en el mapa con ubicación aproximada (ofuscada 200–500 m).`
         );
         setReviewingItem(null);
         await loadBackendWebData();
@@ -877,6 +880,7 @@ export const WebSourcesTab: React.FC = () => {
   // Local filtering for demo mode (or matching backend-filtered items)
   const filteredNews = useMemo(() => {
     return newsItems.filter(item => {
+      if (item.source !== medium) return false;
       const combined = `${item.title}. ${item.excerpt}`;
 
       if (appliedDistricts.length > 0) {
@@ -934,7 +938,7 @@ export const WebSourcesTab: React.FC = () => {
       return true;
     });
   }, [
-    newsItems,
+    newsItems, medium,
     appliedDistricts,
     appliedIncidentTypes,
     appliedLocationRefs,
@@ -951,10 +955,7 @@ export const WebSourcesTab: React.FC = () => {
     Boolean(appliedDateFrom) ||
     Boolean(appliedDateTo);
 
-  const totalCount =
-    backendAvailable && statusInfo?.stats && !hasActiveFilters
-      ? statusInfo.stats.total
-      : filteredNews.length;
+  const totalCount = filteredNews.length;
   const pendingNewsCount = filteredNews.filter(n => n.status === 'Pendiente de validación').length;
   const verifiedNewsCount = filteredNews.filter(n => n.status === 'Verificado').length;
   const discardedNewsCount = filteredNews.filter(n => n.status === 'Descartado').length;
@@ -1033,7 +1034,7 @@ export const WebSourcesTab: React.FC = () => {
               {backendAvailable ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold">
                   <Globe className="w-3.5 h-3.5 text-emerald-600" />
-                  Conexión activa ({statusInfo?.rssUrl || 'https://rpp.pe/rss'})
+                  Feed: {newsMedia[medium].name}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold">
@@ -1044,7 +1045,7 @@ export const WebSourcesTab: React.FC = () => {
             </div>
 
             <h3 className="font-extrabold text-base text-slate-900 pt-1">
-              RPP Noticias — RSS oficial
+              {newsMedia[medium].name} — RSS oficial
             </h3>
             <p className="text-xs text-slate-500 max-w-2xl">
               Consumo exclusivo desde backend del feed RSS oficial (título, extracto breve y enlace original). Ninguna noticia aparece automáticamente en el mapa público sin revisión humana y ubicación confirmada.
@@ -1058,7 +1059,7 @@ export const WebSourcesTab: React.FC = () => {
             title={
               !isModeratorAuthenticated
                 ? 'Autentícate como moderador para habilitar Sincronizar noticias'
-                : 'Sincronizar máximo 20 noticias recientes de RPP Noticias RSS'
+                : 'Sincronizar máximo 20 noticias recientes del medio seleccionado'
             }
           >
             <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
@@ -1126,6 +1127,7 @@ export const WebSourcesTab: React.FC = () => {
             </span>
           </div>
 
+          <label className="block text-xs font-semibold">Medios<select value={medium} disabled={syncing} onChange={e => {setMedium(e.target.value as NewsMediaId);setSuccessMsg(null);setErrorMsg(null);}} className="mt-1 block w-full max-w-sm rounded-lg border border-slate-200 bg-white p-2">{Object.entries(newsMedia).map(([id, m]) => <option key={id} value={id}>{m.name}</option>)}</select></label>
           {/* Group 1: Tipo de incidente */}
           <div className="space-y-2">
             <label className="block text-[11px] font-bold text-slate-700">
@@ -1560,7 +1562,7 @@ export const WebSourcesTab: React.FC = () => {
       {/* Imported News Cards List */}
       {loading ? (
         <div className="bg-white p-10 rounded-3xl border border-slate-200 text-center text-xs text-slate-500">
-          Cargando noticias de RPP Noticias...
+          Cargando noticias del medio seleccionado...
         </div>
       ) : visibleNews.length === 0 ? (
         <div className="bg-white p-10 rounded-3xl border border-slate-200 text-center space-y-2">
@@ -1572,8 +1574,8 @@ export const WebSourcesTab: React.FC = () => {
           </p>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
             {hasActiveFilters
-              ? 'Prueba ajustando o limpiando los filtros activos, o presiona “Sincronizar noticias” para consultar el RSS oficial de RPP Noticias.'
-              : 'Todas las noticias importadas han sido revisadas. Presiona “Sincronizar noticias” para consultar el feed RSS oficial de RPP Noticias.'}
+              ? 'Prueba ajustando o limpiando los filtros activos, o presiona “Sincronizar noticias” para consultar el RSS del medio seleccionado.'
+              : 'Todas las noticias importadas han sido revisadas. Presiona “Sincronizar noticias” para consultar el feed RSS del medio seleccionado.'}
           </p>
         </div>
       ) : (
@@ -1848,7 +1850,7 @@ export const WebSourcesTab: React.FC = () => {
 
             <form onSubmit={handleConfirmLinkIncident} className="p-5 space-y-4 text-xs">
               <p className="text-slate-600">
-                Selecciona el incidente ya registrado que coincide con esta noticia de RPP Noticias para usarla como respaldo informativo.
+                Selecciona el incidente ya registrado que coincide con esta noticia para usarla como respaldo informativo.
               </p>
 
               <div>

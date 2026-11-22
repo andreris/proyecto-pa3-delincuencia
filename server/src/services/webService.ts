@@ -1,3 +1,4 @@
+import { newsMedia, type NewsMediaId } from '../newsMedia.js';
 import { DatabaseAdapter } from '../db/types.js';
 import {
   AuthenticatedUser,
@@ -48,7 +49,7 @@ export interface WebSyncFiltersInput {
 }
 
 export interface WebSyncResult {
-  sourceName: 'RPP Noticias';
+  sourceName: string;
   rssUrl: string;
   fetchedCount: number;
   importedCount: number;
@@ -182,7 +183,8 @@ export class WebService {
   public async syncRppNews(
     db: DatabaseAdapter,
     moderator: AuthenticatedUser,
-    filtersInput?: WebSyncFiltersInput
+    filtersInput?: WebSyncFiltersInput,
+    medium: NewsMediaId = 'rpp'
   ): Promise<WebSyncResult> {
     if (this.isSyncing) {
       throw new WebSyncConflictError();
@@ -200,7 +202,7 @@ export class WebService {
       });
       const remainingMinutes = Math.max(1, Math.ceil(cooldownState.retryAfterSeconds / 60));
       throw new WebSyncCooldownError(
-        `Solo se permite sincronizar RPP Noticias cada ${cooldownState.cooldownMinutes} minutos. Podrás volver a sincronizar a partir de las ${formattedTime} (en aprox. ${remainingMinutes} min).`,
+        `Solo se permite sincronizar medios cada ${cooldownState.cooldownMinutes} minutos. Podrás volver a sincronizar a partir de las ${formattedTime} (en aprox. ${remainingMinutes} min).`,
         cooldownState.nextAllowedSyncAt,
         cooldownState.retryAfterSeconds
       );
@@ -243,7 +245,8 @@ export class WebService {
     }
 
     const { dateFrom, dateTo } = validatedDates;
-    const rssUrl = this.getRssUrl();
+    const sourceName = newsMedia[medium].name;
+    const rssUrl = medium === 'rpp' ? this.getRssUrl() : newsMedia[medium].url;
     this.isSyncing = true;
 
     try {
@@ -266,7 +269,7 @@ export class WebService {
 
       if (!response.ok) {
         throw new Error(
-          `RPP Noticias RSS respondió con HTTP ${response.status}. Verifica disponibilidad del feed.`
+          `${sourceName} RSS respondió con HTTP ${response.status}. Verifica disponibilidad del feed.`
         );
       }
 
@@ -347,7 +350,8 @@ export class WebService {
 
       const { imported, discarded, duplicatesSkipped: insertDupes } = await insertWebNewsDeduped(
         db,
-        evaluatedToPersist
+        evaluatedToPersist,
+        medium
       );
       const totalDuplicatesSkipped = preDuplicatesSkipped + insertDupes;
 
@@ -364,7 +368,7 @@ export class WebService {
         new Date(syncTimestamp).getTime() + cooldownState.cooldownMinutes * 60 * 1000
       ).toISOString();
 
-      const message = `Sincronización RPP Noticias completada: ${parsedItems.length} leídas, ${imported.length} importadas en revisión (máx. ${HARD_MAX_WEB_NEWS_PER_SYNC}), ${omittedCount} omitidas por filtros, ${totalDuplicatesSkipped} duplicadas omitidas${capSkippedCount > 0 ? `, ${capSkippedCount} omitidas por límite de 20` : ''}.`;
+      const message = `Sincronización de ${sourceName} completada: ${parsedItems.length} leídas, ${imported.length} importadas en revisión (máx. ${HARD_MAX_WEB_NEWS_PER_SYNC}), ${omittedCount} omitidas por filtros, ${totalDuplicatesSkipped} duplicadas omitidas${capSkippedCount > 0 ? `, ${capSkippedCount} omitidas por límite de 20` : ''}.`;
 
       await updateWebSyncMetadata(db, {
         lastSyncAt: syncTimestamp,
@@ -388,11 +392,11 @@ export class WebService {
         actorRole: moderator.role,
         targetType: 'web_config',
         targetId: 'rpp-default',
-        details: `Fuente: RPP Noticias (${rssUrl}) • Fecha: ${syncTimestamp} • ${message} • Filtros activos: [${activeFiltersSummary}]${omissionReasons.size > 0 ? ` • Motivos de omisión: ${Array.from(omissionReasons).join(' | ')}` : ''}`
+        details: `Fuente: ${sourceName} (${rssUrl}) • Fecha: ${syncTimestamp} • ${message} • Filtros activos: [${activeFiltersSummary}]${omissionReasons.size > 0 ? ` • Motivos de omisión: ${Array.from(omissionReasons).join(' | ')}` : ''}`
       });
 
       return {
-        sourceName: 'RPP Noticias',
+        sourceName,
         rssUrl,
         fetchedCount: parsedItems.length,
         importedCount: imported.length,

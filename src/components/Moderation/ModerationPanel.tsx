@@ -1,3 +1,4 @@
+import {isNewsMediaId, newsMedia} from '../../../server/src/newsMedia';
 import React, { useEffect, useState } from 'react';
 import { useIncidents } from '../../context/IncidentContext';
 import { useAuth } from '../../context/AuthContext';
@@ -265,9 +266,9 @@ export const ModerationPanel: React.FC = () => {
                           Fuente externa: X (no visible hasta verificar)
                         </span>
                       )}
-                      {report.source === 'rpp' && (
+                      {isNewsMediaId(report.source) && (
                         <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-900 text-white">
-                          Fuente externa: RPP Noticias (no visible hasta verificar)
+                          Fuente externa: {newsMedia[report.source].name} (no visible hasta verificar)
                         </span>
                       )}
                       <span className="text-[10px] font-semibold text-slate-500">

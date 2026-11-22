@@ -300,7 +300,7 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const publicIncidents = incidents.filter(
     item =>
       item.status !== 'Descartado' &&
-      ((item.source !== 'x' && item.source !== 'rpp') || item.status === 'Verificado')
+      ((!item.source || item.source === 'citizen') || item.status === 'Verificado')
   );
 
   // Filter computation (strictly excludes discarded items and unverified X-sourced reports from public map/feed)
