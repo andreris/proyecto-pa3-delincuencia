@@ -36,7 +36,7 @@ function nearPath(point: Point, path: [number, number][]) {
 
 export const PreventiveRoutesView: React.FC = () => {
   const { publicIncidents } = useIncidents();
-  const [selectedRoute, setSelectedRoute] = useState<PreventiveRoute>(DEMO_PREVENTIVE_ROUTES[0]);
+  const [selectedRoute, setSelectedRoute] = useState<PreventiveRoute | null>(DEMO_PREVENTIVE_ROUTES[0]);
   const [points, setPoints] = useState<Partial<Record<'Inicio' | 'Llegada', Point>>>({});
   const [picking, setPicking] = useState<'Inicio' | 'Llegada' | null>(null);
   const [options, setOptions] = useState<Candidate[]>([]);
@@ -53,6 +53,7 @@ export const PreventiveRoutesView: React.FC = () => {
     setMessage('');
     setPicking(null);
     const next = {...points, [key]: point};
+    setSelectedRoute(null);
     setPoints(next);
     if (next.Inicio && next.Llegada) void calculate(next);
     else if (key === 'Inicio') {
@@ -93,6 +94,22 @@ export const PreventiveRoutesView: React.FC = () => {
       if (request.current === id) setBusy(false);
     }
   }
+  function choosePoint(key: 'Inicio' | 'Llegada') {
+    request.current++;
+    setBusy(false);
+    setSelectedRoute(null);
+    setPicking(key);
+    setMessage(`Marca el punto de ${key.toLowerCase()} en el mapa.`);
+    mapPanel.current?.scrollIntoView({block: 'nearest'});
+  }
+
+  function restartRoute() {
+    setPoints({});
+    setOptions([]);
+    setChosen(0);
+    choosePoint('Inicio');
+  }
+
   function locate() {
     const id = ++request.current;
     setBusy(false);
@@ -150,11 +167,18 @@ export const PreventiveRoutesView: React.FC = () => {
         </div>
 
         <section className="p-4 space-y-3 border-b text-sm">
-          <h3 className="font-bold">Planifica tu viaje en auto</h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-bold">Planifica tu viaje en auto</h3>
+            <button type="button" onClick={restartRoute} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">Reiniciar ruta</button>
+          </div>
           {(['Inicio', 'Llegada'] as const).map(key => (
             <div key={key} className="flex items-center justify-between gap-2">
               <div><strong>{key}</strong><div className="text-xs text-slate-600">{points[key] ? `${points[key]!.lat.toFixed(4)}, ${points[key]!.lng.toFixed(4)}` : 'Sin seleccionar'}</div></div>
-              <button className="text-blue-700 font-semibold" onClick={() => {request.current++; setBusy(false); setPicking(key); mapPanel.current?.scrollIntoView({block:'nearest'}); setMessage(`Marca el punto de ${key.toLowerCase()} en el mapa.`);}}>Elegir en mapa</button>
+              <button type="button" aria-label={`Elegir ${key.toLowerCase()} en el mapa`} aria-pressed={picking === key}
+                onClick={() => choosePoint(key)}
+                className="rounded-lg border border-blue-600 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 aria-pressed:bg-blue-700 aria-pressed:text-white">
+                Elegir en mapa
+              </button>
             </div>
           ))}
           <button onClick={locate} className="text-blue-700 font-semibold">Usar mi ubicación como inicio</button>
@@ -185,7 +209,7 @@ export const PreventiveRoutesView: React.FC = () => {
           </label>
           <div className="space-y-2">
             {DEMO_PREVENTIVE_ROUTES.map(route => {
-              const isSelected = !selected && selectedRoute.id === route.id;
+              const isSelected = !selected && selectedRoute?.id === route.id;
               return (
                 <button
                   key={route.id}
@@ -217,7 +241,7 @@ export const PreventiveRoutesView: React.FC = () => {
         </div>
 
         {/* Selected Route Detailed Comparison Card */}
-        {!selected && <div className="p-4 border-t border-slate-100 flex-1 space-y-4">
+        {!selected && selectedRoute && <div className="p-4 border-t border-slate-100 flex-1 space-y-4">
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-500">Evaluación del corredor:</span>
