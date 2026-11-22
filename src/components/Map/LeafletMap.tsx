@@ -1,9 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import { createPortal } from 'react-dom';
 import { IncidentReport, PreventiveRoute } from '../../types';
 import { ShieldAlert, AlertTriangle, Info, Eye, Layers, Compass, LocateFixed } from 'lucide-react';
 
 const defaultCenter: [number, number] = [-12.055, -77.035];
+
+export function RiskLegend() {
+  return (<>
+        <span className="font-bold text-slate-900 flex items-center gap-1">
+          Niveles de riesgo
+        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-600 inline-block shadow-sm ring-2 ring-red-200"></span>
+          <span>Alto</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block shadow-sm ring-2 ring-amber-200"></span>
+          <span>Medio</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block shadow-sm ring-2 ring-blue-200"></span>
+          <span>Informativo</span>
+        </div>
+  </>);
+}
 
 interface LeafletMapProps {
   incidents: IncidentReport[];
@@ -17,6 +38,8 @@ interface LeafletMapProps {
   pickedCoords?: { lat: number; lng: number } | null;
   className?: string;
   showRiskZones?: boolean;
+  showLegend?: boolean;
+  mobileControls?: boolean;
 }
 
 export const LeafletMap: React.FC<LeafletMapProps> = ({
@@ -30,6 +53,8 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   isPickingLocation = false,
   pickedCoords = null,
   className = 'h-full w-full',
+  showLegend = true,
+  mobileControls = false,
   showRiskZones: initialShowRiskZones = true
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -41,6 +66,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
 
   const [showRiskZones, setShowRiskZones] = useState<boolean>(initialShowRiskZones);
   const [mapTileStyle, setMapTileStyle] = useState<'standard' | 'humanitarian'>('standard');
+  const [locationControl, setLocationControl] = useState<HTMLDivElement | null>(null);
   const [userGpsLoading, setUserGpsLoading] = useState<boolean>(false);
 
   // Helper to create category and risk icons
@@ -101,6 +127,15 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
 
     // Custom positioned zoom control on top right
     L.control.zoom({ position: 'topright' }).addTo(map);
+
+    const gps = new L.Control({ position: 'topright' });
+    gps.onAdd = () => {
+      const container = L.DomUtil.create('div', 'leaflet-bar');
+      L.DomEvent.disableClickPropagation(container);
+      setLocationControl(container);
+      return container;
+    };
+    if (mobileControls) gps.addTo(map);
 
     // OpenStreetMap tile layer with required attribution
     const tileUrl =
@@ -440,6 +475,7 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
           {showRiskZones ? 'Zonas de riesgo: Activas' : 'Zonas de riesgo: Ocultas'}
         </button>
 
+        {!mobileControls && <>
         {/* Locate Me */}
         <button
           onClick={handleLocateMe}
@@ -460,26 +496,22 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
           <Compass className="w-3.5 h-3.5 text-slate-500" />
           Lima Metropolitana
         </button>
+        </>}
       </div>
 
+      {locationControl && createPortal(
+        <button type="button" onClick={handleLocateMe} disabled={userGpsLoading}
+          aria-label={userGpsLoading ? 'Buscando ubicación' : 'Mi ubicación'}
+          title="Mi ubicación"
+          className="grid h-8 w-8 place-items-center rounded-sm bg-white text-blue-700 hover:bg-blue-50 focus-visible:outline-blue-600">
+          <LocateFixed aria-hidden="true" className={`h-5 w-5 ${userGpsLoading ? 'animate-spin' : ''}`} />
+        </button>, locationControl
+      )}
+
       {/* Map Legend */}
-      <div className="hidden sm:flex absolute bottom-5 right-4 z-20 bg-white/95 backdrop-blur-sm px-3.5 py-2.5 rounded-xl shadow-md border border-slate-200 text-[11px] items-center gap-4 text-slate-700">
-        <span className="font-bold text-slate-900 flex items-center gap-1">
-          Nivel de riesgo:
-        </span>
-        <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-600 inline-block shadow-sm ring-2 ring-red-200"></span>
-          <span>Alto</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block shadow-sm ring-2 ring-amber-200"></span>
-          <span>Medio</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block shadow-sm ring-2 ring-blue-200"></span>
-          <span>Informativo</span>
-        </div>
-      </div>
+      {showLegend && <div className="hidden sm:flex absolute bottom-5 right-4 z-20 bg-white/95 backdrop-blur-sm px-3.5 py-2.5 rounded-xl shadow-md border border-slate-200 text-[11px] items-center gap-4 text-slate-700">
+        <RiskLegend />
+      </div>}
     </div>
   );
 };

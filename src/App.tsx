@@ -15,9 +15,18 @@ import { AuthModal } from './components/Auth/AuthModal';
 import { ModeratorAuthModal } from './components/Auth/ModeratorAuthModal';
 import { OfflineIndicator } from './components/PWA/OfflineIndicator';
 
+import {MobileMapView} from './components/Dashboard/MobileMapView';
+
 type AppTab = 'landing' | 'map' | 'routes' | 'sos' | 'moderation' | 'profile';
 
 function MainApp() {
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  React.useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const update = () => setMobile(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const { isModerator } = useAuth();
   const [accessOpen, setAccessOpen] = useState(false);
   React.useEffect(() => { setCurrentTab(tab => isModerator ? "moderation" : tab === "moderation" ? "map" : tab); }, [isModerator]);
@@ -33,7 +42,7 @@ function MainApp() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#071224] text-[#0F172A]">
+    <div className="flex flex-col h-dvh w-full overflow-hidden bg-[#071224] text-[#0F172A]">
       <Navbar
         onLogin={() => setAccessOpen(true)}
         currentTab={currentTab}
@@ -52,13 +61,13 @@ function MainApp() {
           />
         )}
 
-        {currentTab === 'map' && (
+        {currentTab === 'map' && (mobile ? <MobileMapView /> :
           <MapView
             onOpenReportModal={() => setIsReportModalOpen(true)}
           />
         )}
 
-        {currentTab === 'routes' && <PreventiveRoutesView />}
+        {currentTab === 'routes' && <PreventiveRoutesView mobile={mobile} />}
 
         {currentTab === 'sos' && <TrustedContactsView />}
 
@@ -66,6 +75,14 @@ function MainApp() {
 
         {currentTab === 'profile' && <ProfileView />}
       </main>
+
+      {mobile && (currentTab === 'map' || currentTab === 'routes') && (
+        <nav aria-label="Navegación del mapa" className="flex shrink-0 items-center justify-around border-t border-slate-200 bg-white py-2 text-sm font-semibold">
+          <button className={currentTab === 'map' ? 'text-blue-700' : ''} onClick={() => setCurrentTab('map')}>Mapa en vivo</button>
+          <button className="rounded-full bg-blue-600 px-4 py-2 text-white" onClick={() => setIsReportModalOpen(true)}>Reportar</button>
+          <button className={currentTab === 'routes' ? 'text-blue-700' : ''} onClick={() => setCurrentTab('routes')}>Rutas preventivas</button>
+        </nav>
+      )}
 
       {/* Global Modals */}
       <ReportIncidentModal

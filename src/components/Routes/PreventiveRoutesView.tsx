@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { PreventiveRoute } from '../../types';
 import { DEMO_PREVENTIVE_ROUTES } from '../../data/demoData';
-import { LeafletMap } from '../Map/LeafletMap';
+import { LeafletMap, RiskLegend } from '../Map/LeafletMap';
 import { useIncidents } from '../../context/IncidentContext';
 import {
   Route,
@@ -34,7 +34,7 @@ function nearPath(point: Point, path: [number, number][]) {
   });
 }
 
-export const PreventiveRoutesView: React.FC = () => {
+export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = false}) => {
   const { publicIncidents } = useIncidents();
   const [selectedRoute, setSelectedRoute] = useState<PreventiveRoute | null>(DEMO_PREVENTIVE_ROUTES[0]);
   const [points, setPoints] = useState<Partial<Record<'Inicio' | 'Llegada', Point>>>({});
@@ -147,6 +147,173 @@ export const PreventiveRoutesView: React.FC = () => {
     }
   };
 
+  if (mobile) return (
+    <div className="grid h-full min-h-0 grid-rows-2 overflow-hidden bg-white font-sans">
+      <div ref={mapPanel} className="relative isolate min-h-0 bg-slate-100">
+        {picking && <p className="pointer-events-none absolute top-3 left-3 z-[500] rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow">Toca el mapa para marcar {picking.toLowerCase()}.</p>}
+        <LeafletMap mobileControls
+          incidents={publicIncidents}
+          selectedIncident={null}
+          pickedCoords={picking === "Llegada" ? points.Inicio : undefined}
+          onPickCoordinate={picking ? point => setPoint(picking, point) : undefined}
+          activeRoute={selected && points.Inicio && points.Llegada ? {
+            origin: {...points.Inicio, name:'Inicio'}, destination: {...points.Llegada, name:'Llegada'},
+            mainPath:selected.path, altPath:options.find(r => r !== selected)?.path ?? []
+          } : selectedRoute}
+          showLegend={false}
+          showRiskZones={true}
+          className="h-full w-full"
+        />
+      </div>
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
+        <section className="box-border min-h-full space-y-3 px-4 py-4 text-sm">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 pb-3 text-xs text-slate-700"><RiskLegend /></div>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-xl font-bold tracking-tight text-slate-900">Tu ruta en auto</h2>
+            <button type="button" onClick={restartRoute} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">Reiniciar ruta</button>
+          </div>
+          <div className="divide-y divide-slate-200 rounded-2xl border border-slate-200 bg-slate-50 px-3">
+          {(['Inicio', 'Llegada'] as const).map(key => (
+            <div key={key} className="flex items-center gap-3 py-2">
+              <span aria-hidden="true" className={`h-3 w-3 shrink-0 border-[3px] ${key === 'Inicio' ? 'rounded-full border-emerald-600' : 'rounded-sm border-blue-600'}`}/>
+
+              <div className="flex-1"><strong>{key}</strong><div className="text-xs text-slate-600">{points[key] ? `${points[key]!.lat.toFixed(4)}, ${points[key]!.lng.toFixed(4)}` : 'Sin seleccionar'}</div></div>
+              <button type="button" aria-label={`Elegir ${key.toLowerCase()} en el mapa`} aria-pressed={picking === key}
+                onClick={() => choosePoint(key)}
+                className="rounded-lg border border-blue-600 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 aria-pressed:bg-blue-700 aria-pressed:text-white">
+                Elegir en mapa
+              </button>
+            </div>
+          ))}
+          </div>
+          <button onClick={locate} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-blue-50 px-3 font-semibold text-blue-800"><Navigation size={16}/>Usar mi ubicación</button>
+        </section>
+        <section className="space-y-3 border-b border-slate-200 px-4 py-3 text-sm">
+          <p className="text-xs text-slate-600">Al marcar ambos puntos, se envían a OSRM para calcular tu ruta en auto.</p>
+          {(busy || (points.Inicio && points.Llegada && !selected)) && <button onClick={() => void calculate()} disabled={busy || !points.Inicio || !points.Llegada} className="w-full rounded-xl bg-blue-600 text-white py-2 font-bold disabled:opacity-50">{busy ? 'Calculando…' : 'Calcular ruta'}</button>}
+          {options.map((r, i) => <button key={i} aria-pressed={chosen === i} onClick={() => setChosen(i)} className={`block w-full text-left border rounded-xl p-3 ${chosen === i ? 'bg-blue-50 border-blue-500' : ''}`}>
+            <strong>{i === 0 ? 'Más rápida estimada' : 'Menos reportes cercanos'}</strong><br/>{Math.max(1,Math.round(r.minutes))} min · {r.km.toFixed(1)} km · {r.reports} reportes
+          </button>)}
+          {selected && <p className="text-xs">Se cuentan reportes verificados a 300 m del trayecto. El tiempo es estimado sin tráfico en vivo.</p>}
+          {message && !picking && <p role="status" className="text-xs text-slate-700">{message}</p>}
+        </section>
+
+        {/* Mandatory Safety Notice */}
+        <div className="order-3 m-4 p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">Sobre las rutas preventivas</p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              “Las rutas son solo referenciales y no garantizan seguridad”. Conduce y camina siempre atento a tu entorno.
+            </p>
+          </div>
+        </div>
+
+        <details className="mx-4 mb-4 rounded-2xl border border-slate-200"><summary className="cursor-pointer p-4 text-sm font-bold">Corredores metropolitanos</summary>
+        <div className="order-4 px-4 pb-3">
+
+          <div className="space-y-2">
+            {DEMO_PREVENTIVE_ROUTES.map(route => {
+              const isSelected = !selected && selectedRoute?.id === route.id;
+              return (
+                <button
+                  key={route.id}
+                  onClick={() => {request.current++; setBusy(false); setPicking(null); setMessage(''); setOptions([]); setSelectedRoute(route);}}
+                  className={`w-full text-left p-3 rounded-xl border transition-all text-xs ${
+                    isSelected
+                      ? 'border-blue-600 bg-blue-50/70 shadow-sm ring-2 ring-blue-500/20'
+                      : 'border-slate-200 hover:border-slate-300 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-slate-900 truncate max-w-[220px]">
+                      {route.name}
+                    </span>
+                    <span className="text-[10px] font-semibold text-blue-700 bg-blue-100/60 px-2 py-0.5 rounded">
+                      {route.distanceKm} km
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-500 text-[11px]">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <span>~{route.durationMinutes} min</span>
+                    <span>•</span>
+                    <span className="text-emerald-700 font-medium">Recomendada activa</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Selected Route Detailed Comparison Card */}
+        {!selected && selectedRoute && <div className="order-5 p-4 border-t border-slate-100 flex-1 space-y-4">
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-500">Evaluación del corredor:</span>
+              {getExposureBadge(selectedRoute.exposureLevel)}
+            </div>
+
+            {/* Origin & Destination chips */}
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0">
+                  A
+                </span>
+                <span className="font-medium text-slate-700 truncate">{selectedRoute.origin.name}</span>
+              </div>
+              <div className="flex items-center gap-2 pl-3">
+                <div className="w-0.5 h-3 bg-slate-300 ml-0.5"></div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0">
+                  B
+                </span>
+                <span className="font-medium text-slate-700 truncate">{selectedRoute.destination.name}</span>
+              </div>
+            </div>
+
+            {/* Metrics */}
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-xs">
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                <p className="text-[10px] text-slate-400 font-medium">Iluminación de vía</p>
+                <p className="font-bold text-slate-800">{selectedRoute.lightingQuality}</p>
+              </div>
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                <p className="text-[10px] text-slate-400 font-medium">Patrullaje integrado</p>
+                <p className="font-bold text-slate-800 truncate">{selectedRoute.patrolFrequency}</p>
+              </div>
+            </div>
+
+            {/* Incident density summary */}
+            <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs flex items-center justify-between">
+              <span className="text-slate-600">Incidentes cercanos al corredor:</span>
+              <span className="font-extrabold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                {selectedRoute.incidentCountNear} reportados recientemente
+              </span>
+            </div>
+          </div>
+
+          {/* Safety Recommendations list */}
+          <div>
+            <h4 className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5">
+              <Shield className="w-4 h-4 text-blue-600" />
+              Recomendaciones para tu trayecto:
+            </h4>
+            <ul className="space-y-2 text-xs text-slate-600">
+              {selectedRoute.safetyNotes.map((note, index) => (
+                <li key={index} className="flex items-start gap-2 bg-white p-2.5 rounded-xl border border-slate-200">
+                  <ChevronRight className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>}
+        </details>
+      </div>
+
+    </div>
+  );
   return (
     <div className="flex-1 flex flex-col lg:flex-row h-full overflow-y-auto lg:overflow-hidden bg-slate-50">
       {/* Sidebar Controls & Itinerary Analysis */}
