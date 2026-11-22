@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { AuthProvider } from './context/AuthContext';
+import { AccessDialog } from './components/Auth/AccessDialog';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { IncidentProvider } from './context/IncidentContext';
 import { Navbar } from './components/Navigation/Navbar';
 import { LandingPage } from './components/Landing/LandingPage';
@@ -17,6 +18,9 @@ import { OfflineIndicator } from './components/PWA/OfflineIndicator';
 type AppTab = 'landing' | 'map' | 'routes' | 'sos' | 'moderation' | 'profile';
 
 function MainApp() {
+  const { isModerator } = useAuth();
+  const [accessOpen, setAccessOpen] = useState(false);
+  React.useEffect(() => { setCurrentTab(tab => isModerator ? "moderation" : tab === "moderation" ? "map" : tab); }, [isModerator]);
   const [currentTab, setCurrentTab] = useState<AppTab>('map');
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isSosModalOpen, setIsSosModalOpen] = useState(false);
@@ -31,6 +35,7 @@ function MainApp() {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#071224] text-[#0F172A]">
       <Navbar
+        onLogin={() => setAccessOpen(true)}
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         onOpenReportModal={() => setIsReportModalOpen(true)}
@@ -57,7 +62,7 @@ function MainApp() {
 
         {currentTab === 'sos' && <TrustedContactsView />}
 
-        {currentTab === 'moderation' && <ModerationPanel />}
+        {currentTab === 'moderation' && isModerator && <ModerationPanel />}
 
         {currentTab === 'profile' && <ProfileView />}
       </main>
@@ -79,6 +84,7 @@ function MainApp() {
         initialMode={authModalMode}
       />
 
+      {accessOpen && <AccessDialog close={() => setAccessOpen(false)} />}
       <ModeratorAuthModal />
 
       {/* Offline Connectivity Toast */}

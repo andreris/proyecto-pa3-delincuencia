@@ -237,6 +237,18 @@ export async function ensureBackendSession(user: UserProfile | null): Promise<st
   }
 }
 
+export async function authenticateGoogle(credential: string) {
+  const res = await fetch(buildApiUrl('/api/auth/google'), {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({credential})
+  });
+  if (!res.ok) throw new Error('No se pudo verificar tu cuenta de Google.');
+  const {token, user} = await res.json() as {token: string; user: {uid: string; email: string; name: string}};
+  activeSessionToken = token;
+  activeSessionRole = 'user';
+  activeSessionUserKey = `${user.uid}:user:${user.email}`;
+  return user;
+}
+
 export function clearBackendSession(): void {
   activeSessionToken = null;
   activeSessionUserKey = null;

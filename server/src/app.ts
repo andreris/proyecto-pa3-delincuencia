@@ -1,3 +1,4 @@
+import { OAuth2Client } from 'google-auth-library';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -60,6 +61,21 @@ export function createApp({ db, xService, webService }: AppDependencies) {
     });
   });
 
+  const googleClient = new OAuth2Client();
+  app.post('/api/auth/google', async (req, res) => {
+    const audience = process.env.VITE_GOOGLE_CLIENT_ID?.trim();
+    if (!audience) { res.sendStatus(503); return; }
+    try {
+      const credential = req.body?.credential;
+      if (typeof credential !== 'string') { res.sendStatus(400); return; }
+      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience });
+      const profile = ticket.getPayload();
+      if (!profile?.sub || !profile.email_verified || !profile.email) { res.sendStatus(401); return; }
+      const user = {uid: 'google:' + profile.sub, name: profile.name || profile.email, email: profile.email, role: 'user' as const};
+      res.json({user, token: issueSessionToken(user)});
+    } catch { res.sendStatus(401); }
+  });
+
   // Session token endpoint for frontend auth / demo persona alignment
   app.post('/api/auth/session', (req, res) => {
     const { uid, name, email, role, moderatorCode } = req.body as {
@@ -70,7 +86,7 @@ export function createApp({ db, xService, webService }: AppDependencies) {
       moderatorCode?: string;
     };
 
-    if (!uid || !name) {
+    if (typeof uid !== 'string' || !uid || (uid.startsWith('google:') && role !== 'moderator') || !name) {
       res.status(400).json({ error: 'Se requiere identificador y nombre de usuario.' });
       return;
     }

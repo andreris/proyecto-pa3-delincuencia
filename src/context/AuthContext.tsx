@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, UserType } from '../types';
 import {
+  authenticateGoogle,
   ApiClientError,
   authenticateModeratorSession,
   clearBackendSession
@@ -17,6 +18,7 @@ interface AuthContextType {
   activateModeratorWithCode: (
     code: string
   ) => Promise<{ success: boolean; error?: string }>;
+  loginGoogle: (credential: string) => Promise<void>;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   register: (
     name: string,
@@ -46,17 +48,7 @@ const DEFAULT_USER: UserProfile = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    try {
-      const saved = localStorage.getItem('vigila_pe_user');
-      if (!saved) return DEFAULT_USER;
-      const parsed = JSON.parse(saved) as UserProfile;
-      // Never auto-restore moderator role from localStorage without fresh code verification
-      return parsed.role === 'moderator' ? { ...parsed, role: 'user' } : parsed;
-    } catch {
-      return DEFAULT_USER;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
   const [isModeratorAuthenticated, setIsModeratorAuthenticated] = useState<boolean>(false);
   const [isModeratorModalOpen, setIsModeratorModalOpen] = useState<boolean>(false);
@@ -272,6 +264,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         openModeratorModal,
         closeModeratorModal,
         activateModeratorWithCode,
+        loginGoogle: async credential => {
+          const user = await authenticateGoogle(credential);
+          setIsModeratorAuthenticated(false);
+          setCurrentUser({ ...user, role: 'user', district: '', userType: 'peaton', avatarInitials: user.name.slice(0,2).toUpperCase(), joinedDate: new Date().toISOString().slice(0,10) });
+        },
         login,
         register,
         logout,

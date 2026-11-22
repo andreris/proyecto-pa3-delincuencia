@@ -20,17 +20,19 @@ import {
 interface NavbarProps {
   currentTab: 'landing' | 'map' | 'routes' | 'sos' | 'moderation' | 'profile';
   setCurrentTab: (tab: 'landing' | 'map' | 'routes' | 'sos' | 'moderation' | 'profile') => void;
+  onLogin: () => void;
   onOpenReportModal: () => void;
   onOpenSosModal: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
+  onLogin,
   currentTab,
   setCurrentTab,
   onOpenReportModal,
   onOpenSosModal
 }) => {
-  const { currentUser, logout, switchUserPersona, isModerator } = useAuth();
+  const { currentUser, logout, isModerator } = useAuth();
   const { incidents, isDemoMode } = useIncidents();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
@@ -124,7 +126,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             Contactos SOS
           </button>
 
-          <button
+          {isModerator && <button
             onClick={() => handleNavClick('moderation')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all relative ${
               currentTab === 'moderation'
@@ -139,7 +141,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 {pendingCount}
               </span>
             )}
-          </button>
+          </button>}
         </nav>
 
         {/* Action Buttons & Profile (Desktop) */}
@@ -164,7 +166,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           {/* User Persona & Profile Dropdown */}
-          <div className="relative">
+          {!currentUser ? <button className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white" onClick={onLogin}>Iniciar sesión</button> : <div className="relative">
             <button
               onClick={() => setProfileDropdownOpen(prev => !prev)}
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-blue-900/60 border border-blue-800/70 hover:bg-blue-800/70 text-xs text-left transition-all"
@@ -195,52 +197,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </span>
                 </div>
 
-                {/* Persona Switcher Quick Demo */}
-                <div className="px-4 py-2 border-b border-slate-100">
-                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
-                    Probar perfil de rol:
-                  </p>
-                  <div className="grid grid-cols-2 gap-1.5 text-xs">
-                    <button
-                      onClick={() => {
-                        switchUserPersona('peaton');
-                        setProfileDropdownOpen(false);
-                      }}
-                      className="px-2 py-1 rounded-lg border text-left hover:bg-slate-50 text-[11px] font-medium"
-                    >
-                      🚶 Peatón
-                    </button>
-                    <button
-                      onClick={() => {
-                        switchUserPersona('conductor');
-                        setProfileDropdownOpen(false);
-                      }}
-                      className="px-2 py-1 rounded-lg border text-left hover:bg-slate-50 text-[11px] font-medium"
-                    >
-                      🚗 Conductor
-                    </button>
-                    <button
-                      onClick={() => {
-                        switchUserPersona('comerciante');
-                        setProfileDropdownOpen(false);
-                      }}
-                      className="px-2 py-1 rounded-lg border text-left hover:bg-slate-50 text-[11px] font-medium"
-                    >
-                      🏪 Comerciante
-                    </button>
-                    <button
-                      onClick={() => {
-                        switchUserPersona('moderador');
-                        setProfileDropdownOpen(false);
-                        setCurrentTab('moderation');
-                      }}
-                      className="px-2 py-1 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-left text-[11px] font-bold"
-                    >
-                      🛡️ Moderador
-                    </button>
-                  </div>
-                </div>
-
                 <button
                   onClick={() => {
                     handleNavClick('profile');
@@ -264,7 +220,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               </div>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* Mobile menu toggle & SOS */}
@@ -276,7 +232,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <PhoneCall className="w-3.5 h-3.5" />
             SOS
           </button>
-
+          {!currentUser && <button className="text-xs font-bold text-white" onClick={onLogin}>Iniciar sesión</button>}
           <button
             onClick={() => setMobileMenuOpen(prev => !prev)}
             className="p-2 rounded-lg bg-blue-900/80 text-white"
@@ -335,7 +291,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               Contactos SOS
             </button>
-            <button
+            {isModerator && <button
               onClick={() => handleNavClick('moderation')}
               className={`p-2.5 rounded-xl text-xs font-semibold text-left col-span-2 flex items-center justify-between ${
                 currentTab === 'moderation' ? 'bg-blue-600 text-white' : 'bg-blue-950 text-slate-200'
@@ -347,13 +303,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {pendingCount} pendientes
                 </span>
               )}
-            </button>
+            </button>}
             <button
-              onClick={() => handleNavClick('profile')}
+              onClick={() => currentUser ? handleNavClick('profile') : onLogin()}
               className="p-2.5 rounded-xl text-xs font-semibold text-left col-span-2 bg-blue-950 text-slate-200"
             >
-              Configurar perfil
+              {currentUser ? "Configurar perfil" : "Iniciar sesión"}
             </button>
+            {currentUser && <button onClick={() => {logout(); handleNavClick("map")}}>Cerrar sesión</button>}
           </div>
         </div>
       )}
