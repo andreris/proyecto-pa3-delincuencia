@@ -28,6 +28,7 @@ interface AuthContextType {
     userType: UserType
   ) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
+  enterGuest: () => void;
   updateProfile: (updates: Partial<UserProfile>) => void;
   resetPassword: (email: string) => Promise<{ success: boolean; message: string }>;
   toggleModeratorRole: () => void;
@@ -272,6 +273,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         register,
         logout,
+        enterGuest: () => {
+          clearBackendSession();
+          setIsModeratorAuthenticated(false);
+          setCurrentUser({ uid: 'guest-' + crypto.randomUUID(), name: 'Usuario invitado', email: '', district: '', userType: 'peaton', role: 'user', avatarInitials: 'UI', joinedDate: new Date().toISOString().slice(0, 10) });
+        },
         updateProfile,
         resetPassword,
         toggleModeratorRole,

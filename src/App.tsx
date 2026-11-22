@@ -78,13 +78,13 @@ function MainApp() {
         onClose={() => setIsSosModalOpen(false)}
       />
 
-      <AuthModal
+      {isAuthModalOpen && <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         initialMode={authModalMode}
-      />
+      />}
 
-      {accessOpen && <AccessDialog close={() => setAccessOpen(false)} />}
+      {accessOpen && <AccessDialog close={() => setAccessOpen(false)} register={() => { setAccessOpen(false); handleOpenRegister(); }} />}
       <ModeratorAuthModal />
 
       {/* Offline Connectivity Toast */}
