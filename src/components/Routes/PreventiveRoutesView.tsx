@@ -52,10 +52,16 @@ export const PreventiveRoutesView: React.FC = () => {
     setOptions([]);
     setMessage('');
     setPicking(null);
-    setPoints(prev => ({...prev, [key]: point}));
+    const next = {...points, [key]: point};
+    setPoints(next);
+    if (next.Inicio && next.Llegada) void calculate(next);
+    else if (key === 'Inicio') {
+      setPicking('Llegada');
+      setMessage('Marca la llegada en el mapa.');
+    }
   }
-  async function calculate() {
-    const {Inicio, Llegada} = points;
+  async function calculate(endpoints = points) {
+    const {Inicio, Llegada} = endpoints;
     if (!Inicio || !Llegada) return;
     const id = ++request.current;
     setPicking(null);
@@ -78,7 +84,7 @@ export const PreventiveRoutesView: React.FC = () => {
       const quieter = routes.reduce((best, r) => r.reports < best.reports ? r : best);
       if (request.current !== id) return;
       setOptions(quieter === routes[0] ? [routes[0]] : [routes[0], quieter]);
-      setChosen(0);
+      setChosen(quieter === routes[0] ? 0 : 1);
       if (routes.length === 1) setMessage('El servicio encontró un solo trayecto.');
       else if (quieter === routes[0]) setMessage('La más rápida también tiene el menor número de reportes entre las alternativas.');
     } catch {
@@ -152,8 +158,8 @@ export const PreventiveRoutesView: React.FC = () => {
             </div>
           ))}
           <button onClick={locate} className="text-blue-700 font-semibold">Usar mi ubicación como inicio</button>
-          <p className="text-xs text-slate-600">Al calcular, se envían ambos puntos a OSRM para buscar rutas por carretera.</p>
-          <button onClick={calculate} disabled={busy || !points.Inicio || !points.Llegada} className="w-full rounded-xl bg-blue-600 text-white py-2 font-bold disabled:opacity-50">{busy ? 'Calculando…' : 'Calcular ruta'}</button>
+          <p className="text-xs text-slate-600">Al marcar ambos puntos, se envían a OSRM para calcular tu ruta en auto.</p>
+          <button onClick={() => void calculate()} disabled={busy || !points.Inicio || !points.Llegada} className="w-full rounded-xl bg-blue-600 text-white py-2 font-bold disabled:opacity-50">{busy ? 'Calculando…' : 'Calcular ruta'}</button>
           {options.map((r, i) => <button key={i} aria-pressed={chosen === i} onClick={() => setChosen(i)} className={`block w-full text-left border rounded-xl p-3 ${chosen === i ? 'bg-blue-50 border-blue-500' : ''}`}>
             <strong>{i === 0 ? 'Más rápida estimada' : 'Menos reportes cercanos'}</strong><br/>{Math.max(1,Math.round(r.minutes))} min · {r.km.toFixed(1)} km · {r.reports} reportes
           </button>)}
