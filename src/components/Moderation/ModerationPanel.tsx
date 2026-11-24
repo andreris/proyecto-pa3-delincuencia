@@ -40,7 +40,7 @@ export const ModerationPanel: React.FC = () => {
     openModeratorModal
   } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'web' | 'stats' | 'logs'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'social' | 'web' | 'google' | 'stats' | 'logs'>('pending');
   const [filterDistrict, setFilterDistrict] = useState<string>('all');
   const [reasonInput, setReasonInput] = useState<{ [id: string]: string }>({});
 
@@ -215,6 +215,18 @@ export const ModerationPanel: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('google')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'google'
+                ? 'bg-[#0B1F3A] text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Globe className="w-4 h-4" />
+            Google Noticias
+          </button>
+
+          <button
             onClick={() => setActiveTab('stats')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
               activeTab === 'stats'
@@ -339,6 +351,9 @@ export const ModerationPanel: React.FC = () => {
 
         {/* TAB 3: WEB SOURCES (RPP Noticias RSS) */}
         {activeTab === 'web' && <WebSourcesTab />}
+
+        {/* TAB 4: GOOGLE NEWS RSS (Peru-only query; backend validation is still required) */}
+        {activeTab === 'google' && <WebSourcesTab initialMedium="google" lockedMedium />}
 
         {/* TAB 2: STATISTICS */}
         {activeTab === 'stats' && (

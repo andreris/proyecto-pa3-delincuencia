@@ -87,7 +87,10 @@ function mapWebNewsToReviewPost(item: WebNewsItem): SocialPost {
   };
 }
 
-export const WebSourcesTab: React.FC = () => {
+export const WebSourcesTab: React.FC<{ initialMedium?: NewsMediaId; lockedMedium?: boolean }> = ({
+  initialMedium = 'rpp',
+  lockedMedium = false
+}) => {
   const {
     currentUser,
     isModerator,
@@ -100,7 +103,7 @@ export const WebSourcesTab: React.FC = () => {
     backendAvailable
   } = useIncidents();
 
-  const [medium, setMedium] = useState<NewsMediaId>("rpp");
+  const [medium, setMedium] = useState<NewsMediaId>(initialMedium);
   const [newsItems, setNewsItems] = useState<WebNewsItem[]>(() => {
     try {
       const saved = localStorage.getItem('vigila_pe_demo_web_news');
@@ -133,6 +136,15 @@ export const WebSourcesTab: React.FC = () => {
   const [appliedDistricts, setAppliedDistricts] = useState<string[]>([]);
   const [appliedDateFrom, setAppliedDateFrom] = useState<string>('');
   const [appliedDateTo, setAppliedDateTo] = useState<string>('');
+
+  const applyRelativeDateRange = (days: number) => {
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(today.getDate() - (days - 1));
+    const dateOnly = (value: Date) => value.toISOString().slice(0, 10);
+    setDraftDateFrom(dateOnly(from));
+    setDraftDateTo(dateOnly(today));
+  };
 
   const [districtMenuOpen, setDistrictMenuOpen] = useState(false);
   const [filterValidationError, setFilterValidationError] = useState<string | null>(null);
@@ -1127,7 +1139,7 @@ export const WebSourcesTab: React.FC = () => {
             </span>
           </div>
 
-          <label className="block text-xs font-semibold">Medios<select value={medium} disabled={syncing} onChange={e => {setMedium(e.target.value as NewsMediaId);setSuccessMsg(null);setErrorMsg(null);}} className="mt-1 block w-full max-w-sm rounded-lg border border-slate-200 bg-white p-2">{Object.entries(newsMedia).map(([id, m]) => <option key={id} value={id}>{m.name}</option>)}</select></label>
+          <label className="block text-xs font-semibold">Medios<select value={medium} disabled={syncing || lockedMedium} onChange={e => {setMedium(e.target.value as NewsMediaId);setSuccessMsg(null);setErrorMsg(null);}} className="mt-1 block w-full max-w-sm rounded-lg border border-slate-200 bg-white p-2 disabled:cursor-not-allowed disabled:bg-slate-100">{Object.entries(newsMedia).map(([id, m]) => <option key={id} value={id}>{m.name}</option>)}</select></label>
           {/* Group 1: Tipo de incidente */}
           <div className="space-y-2">
             <label className="block text-[11px] font-bold text-slate-700">
@@ -1322,32 +1334,17 @@ export const WebSourcesTab: React.FC = () => {
               />
             </div>
 
-            {/* Fecha desde */}
-            <div className="md:col-span-2">
-              <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                Fecha desde
-              </label>
-              <input
-                type="date"
-                aria-label="Fecha desde web"
-                value={draftDateFrom}
-                onChange={e => setDraftDateFrom(e.target.value)}
-                className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
-              />
-            </div>
-
-            {/* Fecha hasta */}
-            <div className="md:col-span-2">
-              <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                Fecha hasta
-              </label>
-              <input
-                type="date"
-                aria-label="Fecha hasta web"
-                value={draftDateTo}
-                onChange={e => setDraftDateTo(e.target.value)}
-                className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs"
-              />
+            {/* Date presets and manual range */}
+            <div className="md:col-span-5">
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">Periodo</label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button type="button" onClick={() => applyRelativeDateRange(7)} className="px-2.5 py-2 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 text-[11px] font-bold">Última semana</button>
+                <button type="button" onClick={() => applyRelativeDateRange(30)} className="px-2.5 py-2 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 text-[11px] font-bold">Último mes</button>
+                <span className="text-[10px] text-slate-400">o escoge un rango:</span>
+                <input type="date" aria-label="Fecha desde web" value={draftDateFrom} onChange={e => setDraftDateFrom(e.target.value)} className="min-w-0 flex-1 px-2 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs" />
+                <span className="text-slate-400">—</span>
+                <input type="date" aria-label="Fecha hasta web" value={draftDateTo} onChange={e => setDraftDateTo(e.target.value)} className="min-w-0 flex-1 px-2 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs" />
+              </div>
             </div>
 
             {/* Apply / Clear buttons */}

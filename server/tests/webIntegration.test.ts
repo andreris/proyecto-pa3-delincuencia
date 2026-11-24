@@ -8,6 +8,16 @@ import { GeocoderService } from '../src/services/geocoderService.js';
 import { WebFetchLike, WebService } from '../src/services/webService.js';
 import { parseRppRssFeed } from '../src/services/rssService.js';
 import { WebNewsRecord } from '../src/types.js';
+import { matchesLocationReferences } from '../src/utils/sanitize.js';
+import { newsMedia } from '../src/newsMedia.js';
+
+test('Google Noticias usa RSS público de Perú y los filtros reconocen variantes de Av', () => {
+  assert.match(newsMedia.google.url, /news\.google\.com\/rss\/search/);
+  assert.match(newsMedia.google.url, /gl=PE/);
+  for (const variant of ['Av. Arequipa', 'av. arequipa', 'aV. Arequipa', 'AV. Arequipa', 'avenida Arequipa']) {
+    assert.equal(matchesLocationReferences(variant, ['avenida']), true, variant);
+  }
+});
 
 function createMockGeocoder(): GeocoderService {
   return new GeocoderService({

@@ -161,6 +161,15 @@ Vigila.pe permite incorporar publicaciones **públicas** recientes de X como **f
 - El endpoint de búsqueda reciente (`/2/tweets/search/recent`) cubre típicamente los últimos **7 días** según el plan de X Developer. Si se solicita un rango de fechas fuera de esa ventana, X API rechazará la consulta y el panel informará claramente al moderador.
 - Los planes gratuitos/básicos de X tienen límites estrictos de solicitudes y volumen mensual (`rate limits`, código `429`). El backend ejecuta una única consulta sin paginación (`max_results=10`), respeta el cooldown de `X_SYNC_COOLDOWN_MINUTES` y deduplica automáticamente por `external_post_id`.
 
+### Google Noticias (RSS público, sin scraping)
+
+El panel de moderación incluye la pestaña **Google Noticias**. Consulta el RSS público de búsqueda de Google Noticias para términos de delincuencia con región e idioma de Perú (`gl=PE`, `ceid=PE:es-419`); no automatiza la página HTML ni copia artículos completos. Solo se guarda el titular, un extracto breve, la fecha y el enlace a la publicación original.
+
+- El backend limita la consulta a Perú y después aplica la validación geográfica existente de Vigila.pe; por diseño, las noticias que no pueden demostrarse dentro de Lima Metropolitana se omiten de la cola de moderación.
+- Los filtros se aplican tanto al listado como a la importación. La normalización interna elimina tildes y no distingue mayúsculas/minúsculas: por ejemplo, el filtro **Avenida / Av** reconoce `Av`, `av`, `aV`, `AV`, `Av.` y `avenida`.
+- En **Periodo** se puede usar **Última semana**, **Último mes** o elegir manualmente **fecha desde — fecha hasta**. El rango se guarda para la siguiente sincronización.
+- Google Noticias RSS es una fuente de descubrimiento reciente, no un archivo histórico garantizado. Todo ítem queda pendiente de revisión humana antes de publicarse.
+
 ### Flujo de Moderación Humana
 1. Inicia sesión o activa el modo **Moderador** ingresando `MODERATOR_ACCESS_CODE` en **Moderación → Fuentes sociales**.
 2. Selecciona los filtros de **distritos** y **rango de fechas**, pulsa **“Aplicar filtros”** y luego **“Sincronizar X”** (máximo 10 publicaciones por ejecución).
