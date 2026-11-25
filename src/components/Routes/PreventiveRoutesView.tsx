@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { PreventiveRoute } from '../../types';
-import { DEMO_PREVENTIVE_ROUTES } from '../../data/demoData';
+import { DEMO_PREVENTIVE_ROUTES, DISTRICT_APPROX_COORDS } from '../../data/demoData';
 import { LeafletMap, RiskLegend } from '../Map/LeafletMap';
 import { useIncidents } from '../../context/IncidentContext';
 import {
@@ -47,7 +47,8 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
   const mapPanel = useRef<HTMLDivElement>(null);
   const selected = options[chosen];
   const [addresses, setAddresses] = useState({Inicio: '', Llegada: ''});
-  const places = DEMO_PREVENTIVE_ROUTES.flatMap(route => [route.origin, route.destination]);
+  const places = [...DEMO_PREVENTIVE_ROUTES.flatMap(route => [route.origin, route.destination]),
+    ...Object.entries(DISTRICT_APPROX_COORDS).map(([name, point]) => ({name: name + " (zona aproximada)", ...point}))];
   function mapsLocation(key: 'Inicio' | 'Llegada') {
     const value = addresses[key].trim();
     const place = places.find(place => place.name === value);
