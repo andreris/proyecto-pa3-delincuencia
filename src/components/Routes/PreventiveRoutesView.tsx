@@ -46,12 +46,43 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
   const request = useRef(0);
   const mapPanel = useRef<HTMLDivElement>(null);
   const selected = options[chosen];
-  function setPoint(key: 'Inicio' | 'Llegada', point: Point) {
+  const [addresses, setAddresses] = useState({Inicio: '', Llegada: ''});
+  const places = DEMO_PREVENTIVE_ROUTES.flatMap(route => [route.origin, route.destination]);
+  function mapsLocation(key: 'Inicio' | 'Llegada') {
+    const value = addresses[key].trim();
+    const place = places.find(place => place.name === value);
+    if (place) return [place.lat, place.lng].join(',');
+    if (!value) return '';
+    return /^-?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/.test(value) ? value : value + ', Perú';
+  }
+  const origin = mapsLocation('Inicio');
+  const destination = mapsLocation('Llegada');
+  const mapsUrl = 'https://www.google.com/maps/dir/?' + new URLSearchParams({api: '1', origin, destination, travelmode: 'driving'});
+  function addressField(key: 'Inicio' | 'Llegada') {
+    return <label className="block min-w-0 flex-1 font-semibold">{key}
+      <input className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-normal"
+        value={addresses[key]} placeholder="Dirección o lugar" list={'places-' + key}
+        onChange={event => {
+          const value = event.target.value;
+          setAddresses(previous => ({...previous, [key]: value}));
+          const place = places.find(place => place.name === value);
+          if (place) { setPoint(key, place, place.name); return; }
+          request.current++;
+          setPoints(previous => ({...previous, [key]: undefined}));
+          setBusy(false); setOptions([]); setSelectedRoute(null); setPicking(null); setMessage('');
+        }}/>
+      <datalist id={'places-' + key}>{places.map(place => <option key={place.name} value={place.name}/>)}</datalist>
+    </label>;
+  }
+  const mapsLink = origin && destination && <a className="block rounded-xl bg-blue-700 p-3 text-center font-bold text-white"
+    href={mapsUrl} target="_blank" rel="noopener noreferrer">Ver indicaciones en Google Maps ↗</a>;
+  function setPoint(key: 'Inicio' | 'Llegada', point: Point, label = [point.lat, point.lng].join(', ')) {
     request.current++;
     setBusy(false);
     setOptions([]);
     setMessage('');
     setPicking(null);
+    setAddresses(previous => ({...previous, [key]: label}));
     const next = {...points, [key]: point};
     setSelectedRoute(null);
     setPoints(next);
@@ -104,6 +135,7 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
   }
 
   function restartRoute() {
+    setAddresses({Inicio: '', Llegada: ''});
     setPoints({});
     setOptions([]);
     setChosen(0);
@@ -177,7 +209,7 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
             <div key={key} className="flex items-center gap-3 py-2">
               <span aria-hidden="true" className={`h-3 w-3 shrink-0 border-[3px] ${key === 'Inicio' ? 'rounded-full border-emerald-600' : 'rounded-sm border-blue-600'}`}/>
 
-              <div className="flex-1"><strong>{key}</strong><div className="text-xs text-slate-600">{points[key] ? `${points[key]!.lat.toFixed(4)}, ${points[key]!.lng.toFixed(4)}` : 'Sin seleccionar'}</div></div>
+              {addressField(key)}
               <button type="button" aria-label={`Elegir ${key.toLowerCase()} en el mapa`} aria-pressed={picking === key}
                 onClick={() => choosePoint(key)}
                 className="rounded-lg border border-blue-600 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 aria-pressed:bg-blue-700 aria-pressed:text-white">
@@ -186,6 +218,7 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
             </div>
           ))}
           </div>
+          {mapsLink}
           <button onClick={locate} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-blue-50 px-3 font-semibold text-blue-800"><Navigation size={16}/>Usar mi ubicación</button>
         </section>
         <section className="space-y-3 border-b border-slate-200 px-4 py-3 text-sm">
@@ -340,7 +373,7 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
           </div>
           {(['Inicio', 'Llegada'] as const).map(key => (
             <div key={key} className="flex items-center justify-between gap-2">
-              <div><strong>{key}</strong><div className="text-xs text-slate-600">{points[key] ? `${points[key]!.lat.toFixed(4)}, ${points[key]!.lng.toFixed(4)}` : 'Sin seleccionar'}</div></div>
+              {addressField(key)}
               <button type="button" aria-label={`Elegir ${key.toLowerCase()} en el mapa`} aria-pressed={picking === key}
                 onClick={() => choosePoint(key)}
                 className="rounded-lg border border-blue-600 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 aria-pressed:bg-blue-700 aria-pressed:text-white">
@@ -348,6 +381,7 @@ export const PreventiveRoutesView: React.FC<{mobile?: boolean}> = ({mobile = fal
               </button>
             </div>
           ))}
+          {mapsLink}
           <button onClick={locate} className="text-blue-700 font-semibold">Usar mi ubicación como inicio</button>
           <p className="text-xs text-slate-600">Al marcar ambos puntos, se envían a OSRM para calcular tu ruta en auto.</p>
           <button onClick={() => void calculate()} disabled={busy || !points.Inicio || !points.Llegada} className="w-full rounded-xl bg-blue-600 text-white py-2 font-bold disabled:opacity-50">{busy ? 'Calculando…' : 'Calcular ruta'}</button>
