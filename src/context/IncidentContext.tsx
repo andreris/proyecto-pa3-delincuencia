@@ -315,12 +315,9 @@ export const IncidentProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (filters.status === 'pendientes' && item.status !== 'Pendiente de validación') return false;
     }
     if (filters.search) {
-      const q = filters.search.toLowerCase();
-      const match =
-        item.title.toLowerCase().includes(q) ||
-        item.description.toLowerCase().includes(q) ||
-        item.district.toLowerCase().includes(q) ||
-        item.approxLocation.address.toLowerCase().includes(q);
+      const words = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(?:avenida|avda)\b/g, 'av').split(/[^a-z0-9]+/).filter(Boolean);
+      const available = words([item.title, item.description, item.district, item.approxLocation.address].join(' '));
+      const match = words(filters.search).every(term => available.some(word => word.startsWith(term)));
       if (!match) return false;
     }
     return true;
